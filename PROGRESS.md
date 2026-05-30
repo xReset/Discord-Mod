@@ -1,8 +1,10 @@
 # DiscordMod — Build Progress
 
 **Last updated:** 2026-05-30
-**Current status:** ✅ **Deleted-message viewer WORKING.** Dispatcher found, MESSAGE_DELETE
-intercepted, deleted messages persist. Next: performance benchmarking + optimization.
+**Current status:** ✅ Snipe (deleted viewer), ✅ telemetry blocking, ✅ fast-UI, ✅ Copy-Avatar
+context-menu item all working. The old DC launcher/panel UI and the text-transform feature were
+**removed** (dead weight). Direction now: a client strictly faster/lighter than vanilla + QOL.
+Next roadmap: hover-prefetch DMs/channels, message-store retention, GIF-favorites cache, edit-snipe.
 
 ## 2026-05-30 — feature working
 
@@ -102,10 +104,30 @@ E:\DiscordMod\
 
 ---
 
+## 2026-05-30 — optimization + telemetry + Copy Avatar; UI/transforms removed
+
+- **Perf pass (verified ~0 idle overhead):** interceptor early-outs on non-delete actions *before* any
+  timing; perf timing gated behind `_measuring` (off unless benchmarking). Row-resolve cache for the
+  scroll re-apply (`_rowCache`, validated by `isConnected`). Suffix `[id$=]` selector instead of `[id*=]`.
+  Async/batched console log flush in the shim (was sync `appendFileSync` per line). Boot poll backoff
+  (150ms early → 500ms).
+- **Telemetry blocking (`DCMod.noTrack`, default ON):** blocks Flux `TRACK`/`ANALYTICS_TRACK_EVENT`
+  at the interceptor **and** drops science/metrics/track/error-reporting/sentry/observability requests
+  via wrapped fetch/XHR/sendBeacon (installed pre-webpack). Verified: ~1 telemetry req/sec dropped.
+- **Fast UI (`DCMod.fastUI`, default ON):** static stylesheet zeroes UI *transitions* (not keyframe
+  animations, so spinners survive). Snappier + less GPU. Felt, not measurable in the longtask harness.
+- **Copy Avatar context-menu item:** clones Discord's "Copy User ID" item (identical styling), injects
+  *Copy Avatar* (+ *Copy Server Avatar* when a guild avatar exists). Copies a `?size=4096` PNG to clipboard.
+  **Listener MUST be CAPTURE phase** — Discord stopsPropagation on user rows so bubble never reaches us
+  (this was the "button doesn't appear" bug). userId parsed by climbing ancestors from the click target
+  to the first enclosing avatar `<img>` (robust to where on the row you click).
+- **Removed:** DC launcher button + panel + its CSS; text transforms + Slate message-box rewrite +
+  `DCMod.transforms`/`transform`. The `PLAN.md` send-time-transform roadmap is abandoned.
+
 ## Planned features → see PLAN.md (authoritative)
 
-- ✅ Inline deleted-message viewer (done — see top of this file).
-- ✅ Custom UI panel (done; transform buttons need repurposing to send-time toggles).
-- ⛔ Pre-send outgoing styles (owoify/visual), pre-send autoanimate, permtyping, settings UI +
-  persistence — the next build, fully specced in `PLAN.md`.
-- Ideas: inline edit history, local filters/keyword highlight.
+- ✅ Snipe / deleted-message viewer.
+- ✅ Telemetry blocking · ✅ fast-UI · ✅ Copy-Avatar context item.
+- ⛔ Removed: UI panel, text transforms, the send-time-outgoing-styles plan.
+- Next: hover-prefetch DMs/channels, message-store retention across navigation, GIF-favorites cache,
+  spellchecker-off, edit-snipe / ghost-ping snipe. See `PLAN.md`.

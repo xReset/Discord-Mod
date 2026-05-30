@@ -100,6 +100,17 @@ function attachReloadWatch(electronModule) {
   } catch (e) {}
 }
 
+// Buffer log lines and flush asynchronously — sync appendFileSync per console
+// line stalls the MAIN process (Discord is chatty). Batch + async = no UI jank.
+let _logBuf = [];
+let _logTimer = null;
+function _flushLog() {
+  _logTimer = null;
+  if (!_logBuf.length) return;
+  const chunk = _logBuf.join("");
+  _logBuf = [];
+  fs.appendFile(LOG_PATH, chunk, function () {});
+}
 function logLine(level, message) {
   try {
     const msg = String(message);
@@ -112,7 +123,8 @@ function logLine(level, message) {
       msg.indexOf("PostMessageTransport") !== -1 ||
       msg.indexOf("was preloaded using") !== -1;
     if (!isOurs && (!isError || isNoise)) return;
-    fs.appendFileSync(LOG_PATH, new Date().toISOString() + " [" + level + "] " + msg + "\\n");
+    _logBuf.push(new Date().toISOString() + " [" + level + "] " + msg + "\\n");
+    if (!_logTimer) _logTimer = setTimeout(_flushLog, 250);
   } catch (e) {}
 }
 

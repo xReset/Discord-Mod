@@ -1,8 +1,18 @@
 # DiscordMod
 
-Custom Discord client mod for Discord **Stable** (Windows). Injector + main-world renderer
-plugins. First feature: **deleted-message viewer** — messages deleted by *others* stay visible,
-painted **red**, instead of vanishing. Messages *you* delete still vanish normally.
+Custom Discord client mod for Discord **Stable** (Windows). Injector + main-world renderer.
+Goal: a client that's **strictly better than vanilla** — faster, lighter, no telemetry, plus QOL.
+
+Features today:
+- **Deleted-message viewer (snipe)** — messages deleted by *others* stay visible, painted **red**,
+  instead of vanishing. Messages *you* delete still vanish normally. Shift+right-click a red one to drop it.
+- **Telemetry blocking** — Discord analytics / metrics / Sentry crash-reports dropped at both the Flux
+  `TRACK` dispatch and the network layer (fetch / XHR / sendBeacon). On by default.
+- **Fast UI** — collapses Discord's transition tweens to ~instant (menus, channel switches, popouts).
+  Snappier *and* fewer composited frames (less GPU). On by default.
+- **Copy Avatar** — adds a native-looking item to the user context menu that copies a hi-res avatar PNG
+  to your clipboard. In a server where they have a server-specific pfp you get both *Copy Server Avatar*
+  and *Copy Avatar*.
 
 This is fully our own injector (not Vencord/BetterDiscord). It loads the original Discord app
 untouched and adds a chained preload that injects our renderer script.
@@ -29,6 +39,15 @@ class + a lazy MutationObserver paint it red (the whole row, so gif/embed-only m
 and re-apply on scroll/virtualization. Deletes **you** initiate are allow-listed (via a
 `deleteMessage` hook) so they vanish normally. Retention is capped (500) to bound memory.
 
+The same dispatcher hook also blocks `TRACK` analytics actions; a fetch/XHR/sendBeacon wrapper
+(installed pre-webpack) drops telemetry network calls. A static stylesheet zeroes UI transitions
+(`fastUI`). A capture-phase `contextmenu` listener parses the right-clicked user's avatar to inject
+the **Copy Avatar** item, cloned from Discord's own "Copy User ID" item so styling matches exactly;
+hi-res URLs come from UserStore / GuildMemberStore.
+
+**Perf:** our hooks cost ~0 at idle (verified). The interceptor early-outs on non-delete actions before
+any timing; perf timing is gated behind a `_measuring` flag (off unless benchmarking). See `AGENT_NOTES.md`.
+
 ## Install
 
 > Requires Node.js. **Fully quit Discord first** (tray icon → Quit) or files are locked.
@@ -42,16 +61,19 @@ node install.js
 Then relaunch Discord. Open DevTools (`Ctrl+Shift+I`) → Console; you should see `[DCMod] ready`.
 
 ### Use it
-- A floating **`DC`** button (bottom-right) opens the UI panel (deleted-viewer toggle/clear; the
-  text-transform buttons are present but use a draft-rewrite model that is being repurposed to
-  send-time toggles — see `PLAN.md`).
-- Have someone (or an alt) delete a message in a channel you're viewing → it turns **red** (no
-  label) instead of disappearing.
-- **Shift+right-click** a red message → removes it from your view (works for gifs/embeds).
+- **Snipe:** have someone delete a message in a channel you're viewing → it turns **red** (no label)
+  instead of disappearing. **Shift+right-click** a red message → removes it from your view (gifs/embeds too).
+- **Copy Avatar:** right-click a user → *Copy Avatar* (and *Copy Server Avatar* when they have one) →
+  paste the image straight into chat.
+- Telemetry blocking + fast UI are **on by default** — nothing to click.
+- There is **no UI panel / launcher button** anymore (removed). Everything is automatic or via the
+  context menu; tuning is through the console.
 
 Console controls:
-- `DCMod.toggleDeleted()` — viewer on/off · `DCMod.clearDeleted()` — clear all red styling
+- `DCMod.toggleDeleted()` — snipe on/off · `DCMod.clearDeleted()` — clear all red styling
 - `DCMod.removeLocal(id)` — remove one preserved message
+- `DCMod.noTrack(bool?)` — telemetry blocking on/off; returns `{enabled, blocked}` count
+- `DCMod.fastUI(bool?)` — instant transitions on/off (A/B the feel)
 - `DCMod.perf()` / `DCMod.autoBench()` — perf snapshot / scripted A/B benchmark
 
 ## Iterate

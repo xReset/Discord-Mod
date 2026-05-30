@@ -3,8 +3,10 @@
 **Location (code):** `E:\DiscordMod`
 **Target:** Discord **Stable**, Windows 11
 **Stack:** JavaScript / Electron (NOT Python — fully separate from the `E:\Selfbot` Python selfbot)
-**Status:** deleted-message viewer working + custom UI panel, as of 2026-05-30. Next: send-time
-outgoing transforms (see `PLAN.md`).
+**Status (2026-05-30):** snipe (deleted viewer), telemetry blocking, fast-UI, and a Copy-Avatar
+context-menu item all working. The DC launcher/panel UI and text transforms were **removed**.
+Direction: a client strictly faster/lighter than vanilla + QOL. Next: hover-prefetch, message-store
+retention, GIF-favorites cache (see `PLAN.md`).
 
 ---
 
@@ -54,7 +56,12 @@ work) and re-apply on re-render/virtualization. Retention capped at 500. See `AG
 full hard-won internals + perf notes.
 
 Console controls (DevTools console): `DCMod.toggleDeleted()`, `DCMod.clearDeleted()`,
-`DCMod.removeLocal(id)`, plus perf/benchmark: `DCMod.perf()`, `DCMod.autoBench()`.
+`DCMod.removeLocal(id)`, `DCMod.noTrack(bool?)` (telemetry block + dropped count),
+`DCMod.fastUI(bool?)` (instant transitions), plus perf: `DCMod.perf()`, `DCMod.autoBench()`.
+
+**Other features now live:** telemetry blocking (Flux `TRACK` + fetch/XHR/sendBeacon, default ON),
+fast-UI (zeroes transition tweens, default ON), and a **Copy Avatar** user-context-menu item
+(server-vs-default choice, hi-res PNG to clipboard). See `AGENT_NOTES.md` for internals.
 
 ---
 
@@ -137,6 +144,7 @@ Quit Discord, `node uninstall.js` (restores original `app.asar` from `_app.asar`
 | `PLAN.md` | corrected UX model + next build plan + undocumented hooks. |
 | `SELFBOT_AND_CLIENT.md` | selfbot feature map + migration plan. |
 | `tools/` | helper scripts: `check` / `iterate` / `restart` / `wait-ready` / `status`. |
+| `.claude/skills/sign-off/` | `/sign-off` skill — audit+update all `.md`, then commit & push. |
 
 ---
 
@@ -161,10 +169,10 @@ Features only a client mod can do (selfbot cannot):
   themes, notification rules.
 
 ### Next concrete step
-Deleted-message viewer is **done and working** (see `PROGRESS.md`). The next build is the
-**send-time outgoing transforms** (owoify / visual styles / pre-send autoanimate) + permtyping +
-settings UI — fully specced in `PLAN.md`. The UI panel exists; its transform buttons must be
-repurposed from draft-rewrite to persistent send-time toggles.
+Snipe, telemetry-block, fast-UI, and Copy-Avatar are **done** (see `PROGRESS.md`). Next build targets
+**perceived speed**: hover-prefetch DMs/channels, MessageStore retention across navigation, and a
+GIF-favorites cache — fully specced in `PLAN.md`. (The old UI-panel / send-time-transform plan is
+abandoned and the code removed.)
 
 ---
 

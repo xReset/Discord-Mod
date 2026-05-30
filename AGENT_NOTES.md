@@ -178,10 +178,59 @@ Real action shapes (build 1.0.9239):
   it's allow-listed and lets it pass → store drops it → gone from view. (These messages are
   already deleted server-side, so there's nothing to delete on Discord's end.)
 
+## Context-menu injection (Copy Avatar) — build 1.0.9239 (2026-05-30)
+
+- **The listener MUST be CAPTURE phase** (`addEventListener("contextmenu", fn, true)`). Discord calls
+  `stopPropagation()` on the contextmenu event for **user rows** (DM list, member list), so a BUBBLE
+  listener never fires for them — server-folder icons bubble fine, which made it look intermittent.
+  This was the "button doesn't appear" bug. (Same reason the snipe listener is capture.)
+- **Get the userId by climbing ancestors** from `e.target` outward (≤8 levels), using the FIRST element
+  that encloses an avatar `<img>`; parse its src. Works wherever on the row you click. A single
+  `closest(selector)` guess is fragile (avatar may be outside the matched container) → flaky.
+  - global avatar src: `/avatars/<userId>/<hash>` · guild avatar src: `/guilds/<gid>/users/<uid>/avatars/<hash>`.
+  - Default-avatar users (`/embed/avatars/N.png`) carry **no id** → item can't resolve for them (rare).
+- **Menu renders 1-2 frames AFTER the contextmenu event** → on right-click, record the user, then poll
+  ~30 rAF frames for an open `[role="menu"]` that contains a "Copy User ID" item; inject once, stop.
+- **Match styling by CLONING** Discord's "Copy User ID" menuitem (`cloneNode(true)`) — identical
+  classes = identical height/padding. The clone is inert (React handlers are fiber-tracked, not copied),
+  so add our own `click` listener; strip the `[class*=iconContainer]` ID badge; relabel `[class*=label]`.
+  Cloned items don't get Discord's JS focus-highlight class → add a CSS `.dcmod-menuitem:hover` using
+  `var(--background-modifier-hover)` for feedback. Close the menu after action via
+  `_dispatcher.dispatch({type:"CONTEXT_MENU_CLOSE"})`.
+- **UserStore discovery is a trap:** `findByProps("getCurrentUser","getUser")` matches a **locale store**
+  too (its `getCurrentUser()` returns `{locale,ast}`). Validate: scan for a module where
+  `getCurrentUser()` returns an object with `.id` AND `typeof .username === "string"`. `getUsers` alone
+  is NOT a reliable extra prop. GuildMemberStore = `findByProps("getMember","getMemberIds")`.
+- **Clipboard:** fetch the CDN `.png?size=4096` (returns `image/png` — CORS allowed from discord.com),
+  `navigator.clipboard.write([new ClipboardItem({"image/png": blob})])`. Runs in the click gesture → allowed.
+  Canvas-convert as a fallback if a non-png ever comes back.
+
+## Telemetry blocking + fast-UI (2026-05-30)
+
+- **`noTrack` (default ON):** interceptor returns `true` (drops) for action types `TRACK` /
+  `ANALYTICS_TRACK_EVENT` — handler never builds the payload. PLUS a network wrapper installed
+  **pre-webpack** (these globals exist before boot) patches `fetch` / `XMLHttpRequest.open+send` /
+  `navigator.sendBeacon` to drop URLs matching
+  `/api/v\d+/(science|metrics|track)`, `/error-reporting`, `sentry.io`, `/observability`, `/rtc/quality`.
+  fetch returns a fake 204 so Discord's code doesn't throw. Idempotent via `window.__DCMOD_NOTRACK__`.
+  Verified ~1 dropped req/sec. The dispatcher candidate has a `_sentryUtils` field — that's the
+  crash-telemetry path the block starves.
+- **`fastUI` (default ON):** one static `<style>` sets `transition-duration:.001s; transition-delay:0s`
+  on `*`. **Transitions only — never keyframe `animation`** (spinners/loading/voice rings must keep
+  working). Resource-negative (fewer composited frames). NOT measurable by the longtask harness (it's a
+  tween delay, not CPU) — verify by feel / `DCMod.fastUI(false)` A/B.
+
 ## Performance (must stay light — user runs many servers)
 
-- **Our self-overhead is ~0 at idle** (measured: interceptor ~0.7ms + observer ~0.7ms over 30s).
-  The dominant long-task time in the log is Discord itself, not us. Keep it that way.
+- **Our self-overhead is ~0 at idle** and now genuinely free off the hot path. The interceptor
+  **early-outs on non-delete action types BEFORE any timing or work** (one string compare + return for
+  the thousands of other dispatches). Perf timing (`performance.now()` ×2 + counter writes) is gated
+  behind `_measuring` (default OFF; only `bench`/`autoBench` flip it on) — so we don't tax every
+  dispatch just to measure ourselves. The dominant long-task time in the log is Discord, not us.
+- **`_rowCache` (Map id→`<li>`, validated by `isConnected`)** caches the costly avatar-row lookup so
+  `applyAll` doesn't re-run `querySelector('li[id$="<id>"]')` every animation frame during scroll.
+  Cleared on `removeLocal`/`clearDeleted`; bounded by the retention cap. The selector is suffix
+  (`[id$=]`) not substring (`[id*=]`) — anchored, faster.
 - **MutationObserver discipline:** only observe while `deletedIds.size > 0`; disconnect when it
   hits 0; coalesce to ONE `applyAll` per `requestAnimationFrame`. Never re-add a `document.body`
   `{subtree:true}` observer that runs on every mutation — that was the tax.
@@ -211,14 +260,13 @@ Real action shapes (build 1.0.9239):
 - Method note: autoBench runs ON phase first, OFF second; second pass can differ (warm caches,
   different rendered content). For rigor, run autoBench 2-3× and average, DevTools closed.
 
-## Next work + corrected UX model → see PLAN.md
+## Next work → see PLAN.md
 
-Panel buttons must be TOGGLES for persistent ambient outgoing modes (owoify-on, autoanimate-on,
-visual-style), applied automatically at SEND time by wrapping `sendMessage` — NOT one-shot draft
-rewrites (current transform buttons use the wrong model; repurpose them). Plus permtyping +
-settings UI for server/channel IDs + localStorage persistence. Full plan + undocumented hooks
-(MessageActions aggregate has sendMessage/editMessage; Slate box selector; double-boot guard
-requirement; restart caveat) are in `PLAN.md`.
+Direction: a client **strictly faster/lighter than vanilla** + QOL. Done: snipe, telemetry block,
+fast-UI, Copy-Avatar. The old send-time-transforms / UI-panel plan is **abandoned** (UI + transforms
+removed). Next roadmap (highest felt-impact first): hover-prefetch DMs/channels, MessageStore retention
+across navigation, GIF-favorites cache, spellchecker-off (main-process), edit-snipe / ghost-ping snipe.
+Full notes in `PLAN.md`.
 
 ## Changelog (append one line per session)
 
@@ -236,3 +284,10 @@ requirement; restart caveat) are in `PLAN.md`.
   toggle/clear + (draft-rewrite) transform buttons — buttons to be repurposed to send-time toggles
   (see PLAN.md). Added WORKFLOW.md + validated tools/ scripts (fixed em-dash PowerShell parse bug).
   Audited all .md for accuracy.
+- 2026-05-30: Optimization + features pass. Interceptor early-out before timing + `_measuring` gate
+  (zero per-dispatch overhead). `_rowCache` + `[id$=]` selector. Async/batched shim log flush. Boot
+  poll backoff. **Telemetry blocking** (`noTrack`: TRACK dispatch + fetch/XHR/sendBeacon, default ON,
+  ~1 req/sec dropped). **fast-UI** (instant transitions, default ON). **Copy-Avatar** context-menu
+  item (clone "Copy User ID", CAPTURE-phase listener, ancestor-climb userId, validated UserStore,
+  server-vs-default choice, clipboard PNG). **Removed** DC launcher/panel + text transforms +
+  `DCMod.transforms`. Added `sign-off` skill + this changelog. Committed + pushed.

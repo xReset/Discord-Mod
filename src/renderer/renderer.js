@@ -26,6 +26,67 @@
   log("renderer injected ✓ — booting");
 
   // ---------------------------------------------------------------------------
+  // Telemetry blocker — drop Discord's analytics/metrics/crash-reporting at the
+  // network layer. Installed immediately (these globals exist before webpack
+  // boots) so we catch early beacons too. Pairs with the TRACK interceptor block.
+  // Narrow, anchored patterns — only known telemetry endpoints, no functional API.
+  // ---------------------------------------------------------------------------
+  const _TELEMETRY_RE =
+    /\/api\/v\d+\/(science|metrics|track)\b|\/error-reporting|\bsentry\.io\b|\/observability(-relay)?\b|\/rtc\/quality/i;
+  function _isTelemetryUrl(u) {
+    try {
+      return _noTrack && _TELEMETRY_RE.test(String(u));
+    } catch (e) {
+      return false;
+    }
+  }
+  (function installTelemetryBlocker() {
+    if (window.__DCMOD_NOTRACK__) return;
+    window.__DCMOD_NOTRACK__ = true;
+    try {
+      const _fetch = window.fetch;
+      if (_fetch) {
+        window.fetch = function (input, init) {
+          const url = (input && typeof input === "object" && input.url) || input;
+          if (_isTelemetryUrl(url)) {
+            _telBlocked++;
+            return Promise.resolve(new Response("", { status: 204, statusText: "No Content" }));
+          }
+          return _fetch.apply(this, arguments);
+        };
+      }
+    } catch (e) {}
+    try {
+      const _open = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (method, url) {
+        if (_isTelemetryUrl(url)) {
+          this.__dcmodBlocked = true;
+          _telBlocked++;
+        }
+        return _open.apply(this, arguments);
+      };
+      const _send = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function () {
+        if (this.__dcmodBlocked) return; // swallow — never hits the network
+        return _send.apply(this, arguments);
+      };
+    } catch (e) {}
+    try {
+      if (navigator.sendBeacon) {
+        const _beacon = navigator.sendBeacon.bind(navigator);
+        navigator.sendBeacon = function (url) {
+          if (_isTelemetryUrl(url)) {
+            _telBlocked++;
+            return true; // pretend it queued
+          }
+          return _beacon.apply(navigator, arguments);
+        };
+      }
+    } catch (e) {}
+    log("telemetry blocker installed (fetch/XHR/sendBeacon)");
+  })();
+
+  // ---------------------------------------------------------------------------
   // Capture the REAL webpack require(s).
   //
   // Discord's entrypoint PRE-POPULATES module factories on a require whose `.m`
@@ -39,6 +100,9 @@
   let _loggedCandidates = false;
   let _hookMode = "";
   let _hooksActive = true; // A/B switch for benchmarking (DCMod.setActive)
+  let _measuring = false; // when false, interceptor/observer skip perf timing (zero overhead)
+  let _noTrack = true; // block Discord analytics/telemetry (TRACK dispatches + network)
+  let _telBlocked = 0; // count of telemetry requests/events we dropped
 
   // ---------------------------------------------------------------------------
   // Perf harness — measures OUR self-imposed overhead so optimizations are
@@ -392,6 +456,29 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Speed CSS — collapse Discord's UI *transitions* (state-change tweens: menu/
+  // popout opens, channel switches, hovers, fade-ins) to near-instant. We touch
+  // transitions ONLY, never keyframe `animation`, so spinners / loading / voice
+  // indicators keep working. Net effect: clicks resolve with no artificial delay
+  // AND fewer composited frames (less GPU). Toggle: DCMod.fastUI(bool).
+  // ---------------------------------------------------------------------------
+  let _fastUI = true;
+  function injectSpeedStyle() {
+    let el = document.getElementById("dcmod-speed-style");
+    if (!el) {
+      el = document.createElement("style");
+      el.id = "dcmod-speed-style";
+      document.head.appendChild(el);
+    }
+    el.textContent = _fastUI
+      ? `*, *::before, *::after {
+           transition-duration: 0.001s !important;
+           transition-delay: 0s !important;
+         }`
+      : ``;
+  }
+
+  // ---------------------------------------------------------------------------
   // Deleted-message viewer
   // ---------------------------------------------------------------------------
   const deletedIds = new Set();
@@ -401,16 +488,27 @@
 
   // Locate the text node AND the message row for a message id. Gif/embed-only
   // messages may have no message-content text node, so we also find the row by id.
+  const _rowCache = new Map(); // id -> last-resolved <li> (validated by isConnected)
   function elsFor(id) {
     const content = document.getElementById("message-content-" + id);
     let row = content ? content.closest("li") : null;
     if (!row) {
-      try {
-        // Discord message rows carry the message id in their element id
-        // (e.g. chat-messages-<channelId>-<id> / chat-messages___<id>).
-        row = document.querySelector('li[id*="' + id + '"]');
-      } catch (e) {}
+      // Reuse the last-resolved row if it's still in the DOM — avoids the costly
+      // full-DOM substring-attribute scan on every frame for embed/gif-only rows.
+      const cached = _rowCache.get(id);
+      if (cached && cached.isConnected) {
+        row = cached;
+      } else {
+        try {
+          // Discord message rows carry the message id in their element id
+          // (e.g. chat-messages-<channelId>-<id> / chat-messages___<id>).
+          // Row ids end with the message id (chat-messages-<chan>-<id> /
+          // chat-messages___<id>); anchored suffix match beats a substring scan.
+          row = document.querySelector('li[id$="' + id + '"]');
+        } catch (e) {}
+      }
     }
+    if (row) _rowCache.set(id, row);
     return { content, row };
   }
 
@@ -455,6 +553,7 @@
   function removeLocal(id) {
     id = String(id);
     deletedIds.delete(id);
+    _rowCache.delete(id);
     allowDelete.add(id);
     const { content, row } = elsFor(id);
     if (content) content.classList.remove("dcmod-deleted");
@@ -549,13 +648,21 @@
     // This runs on the REAL dispatch path even if `Dispatcher` is a facade.
     function interceptor(action) {
       if (!_hooksActive) return false; // benchmark A/B: near-zero cost when off
-      const _t0 = performance.now();
+      // Cheap gate FIRST, before any timing: only message-delete actions matter.
+      // The ~thousands of other dispatches now cost a single type compare + return
+      // (no performance.now, no counter writes) — true vanilla parity off the delete path.
+      const type = action && action.type;
+      // Drop analytics events at the source — the science/track handlers never run,
+      // so they never build or send the telemetry payload. One compare on the hot path.
+      if (_noTrack && (type === "TRACK" || type === "ANALYTICS_TRACK_EVENT")) {
+        _telBlocked++;
+        return true;
+      }
+      if (type !== "MESSAGE_DELETE" && type !== "MESSAGE_DELETE_BULK") return false;
+      const _t0 = _measuring ? performance.now() : 0;
       let result = false;
       try {
-        // Cheap gate first: only message-delete actions matter. Avoid all string
-        // work (Object.keys etc.) for the ~thousands of other dispatches.
-        const type = action && action.type;
-        if (type === "MESSAGE_DELETE" || type === "MESSAGE_DELETE_BULK") {
+        {
           if (_msgActionLog < 80) {
             _msgActionLog++;
             log("action type=" + type + " keys=[" + Object.keys(action).slice(0, 12).join(",") + "]");
@@ -574,8 +681,10 @@
       } catch (e) {
         warn("interceptor error", String(e));
       } finally {
-        _perf.intMs += performance.now() - _t0;
-        _perf.intN++;
+        if (_measuring) {
+          _perf.intMs += performance.now() - _t0;
+          _perf.intN++;
+        }
       }
       return result;
     }
@@ -612,10 +721,14 @@
     _rafScheduled = true;
     requestAnimationFrame(() => {
       _rafScheduled = false;
-      const t = performance.now();
-      applyAll();
-      _perf.obsMs += performance.now() - t;
-      _perf.obsN++;
+      if (_measuring) {
+        const t = performance.now();
+        applyAll();
+        _perf.obsMs += performance.now() - t;
+        _perf.obsN++;
+      } else {
+        applyAll();
+      }
     });
   }
 
@@ -641,6 +754,8 @@
   // right-click (and any click on a non-preserved message) passes through to
   // Discord untouched.
   function installContextMenu() {
+    if (window.__DCMOD_CTX_INSTALLED__) return; // survive hot-reload re-injects
+    window.__DCMOD_CTX_INSTALLED__ = true;
     document.addEventListener(
       "contextmenu",
       (e) => {
@@ -665,252 +780,220 @@
   }
 
   // ===========================================================================
-  // Text transforms (ported from the selfbot's visuals/owoify). Pure string→string.
-  // Applied PRE-SEND by rewriting the message box, so the sent message is already
-  // styled — zero flash, no edits, no (edited) tag. (See SELFBOT_AND_CLIENT.md.)
+  // "Copy Avatar" context-menu item — injects a native-looking entry into the
+  // user context menu that copies a high-res avatar PNG to the clipboard. When
+  // the user has a server-specific avatar (and you're in that guild) you get BOTH
+  // "Copy Server Avatar" and "Copy Avatar" so you can choose. We CLONE Discord's
+  // own "Copy User ID" item so height/padding/styling match exactly.
   // ===========================================================================
-  const _map = (s, from, to) => {
-    let out = "";
-    for (const ch of s) {
-      const i = from.indexOf(ch);
-      out += i === -1 ? ch : to[i];
-    }
-    return out;
-  };
-  const _LOWER = "abcdefghijklmnopqrstuvwxyz";
-  const _UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const _DIGITS = "0123456789";
+  let _UserStore = null;
+  let _GuildMemberStore = null;
+  let _pendingUser = null; // {userId, guildId} captured on right-click
 
-  function _fromCodepoints(base) {
-    // base = array of starting codepoints for [a..z]; build 26-char string.
-    return Array.from({ length: 26 }, (_, i) => String.fromCodePoint(base + i)).join("");
+  // The real UserStore: has getUser+getCurrentUser+getUsers AND getCurrentUser()
+  // returns a user object with an .id (rules out the locale store that also has
+  // getCurrentUser/getUser but returns settings).
+  function _findUserStore() {
+    for (const r of allRequires()) {
+      const m = findModule(
+        r,
+        (mod) =>
+          typeof mod.getCurrentUser === "function" &&
+          typeof mod.getUser === "function" &&
+          (function () {
+            try {
+              const cu = mod.getCurrentUser();
+              return cu && cu.id && typeof cu.username === "string";
+            } catch (e) {
+              return false;
+            }
+          })()
+      );
+      if (m) return m;
+    }
+    return null;
   }
 
-  const transforms = {
-    vaporwave(t) {
-      let out = "";
-      for (const ch of t) {
-        const c = ch.codePointAt(0);
-        if (c >= 0x21 && c <= 0x7e) out += String.fromCodePoint(c + 0xfee0);
-        else if (ch === " ") out += "　";
-        else out += ch;
-      }
-      return out;
-    },
-    smallcaps(t) {
-      const sc = "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘQʀsᴛᴜᴠᴡxʏᴢ";
-      return _map(t.toLowerCase(), _LOWER, sc);
-    },
-    doublestruck(t) {
-      // 𝕒.. (U+1D552) lowercase, 𝔸.. (U+1D538) uppercase, 𝟘.. (U+1D7D8) digits
-      const lo = _fromCodepoints(0x1d552);
-      const up = _fromCodepoints(0x1d538);
-      const dg = Array.from({ length: 10 }, (_, i) => String.fromCodePoint(0x1d7d8 + i)).join("");
-      return _map(_map(_map(t, _LOWER, lo), _UPPER, up), _DIGITS, dg);
-    },
-    script(t) {
-      // 𝓪.. (U+1D4EA) bold script lowercase, 𝓐.. (U+1D4D0) uppercase
-      const lo = _fromCodepoints(0x1d4ea);
-      const up = _fromCodepoints(0x1d4d0);
-      return _map(_map(t, _LOWER, lo), _UPPER, up);
-    },
-    bold(t) {
-      const lo = _fromCodepoints(0x1d41a);
-      const up = _fromCodepoints(0x1d400);
-      const dg = Array.from({ length: 10 }, (_, i) => String.fromCodePoint(0x1d7ce + i)).join("");
-      return _map(_map(_map(t, _LOWER, lo), _UPPER, up), _DIGITS, dg);
-    },
-    bigtext(t) {
-      let out = [];
-      for (const ch of t.toLowerCase()) {
-        if (ch >= "a" && ch <= "z") out.push(String.fromCodePoint(0x1f1e6 + (ch.charCodeAt(0) - 97)) + " ");
-        else if (ch === " ") out.push("  ");
-        else out.push(ch);
-      }
-      return out.join("");
-    },
-    spoilerify(t) {
-      return Array.from(t).map((c) => (c === " " ? " " : "||" + c + "||")).join("");
-    },
-    zalgo(t) {
-      const marks = [];
-      for (let c = 0x0300; c <= 0x036f; c++) marks.push(String.fromCharCode(c));
-      let out = "";
-      for (const ch of t) {
-        out += ch;
-        if (ch !== " ") for (let i = 0; i < 5; i++) out += marks[Math.floor(Math.random() * marks.length)];
-      }
-      return out;
-    },
-    owoify(t) {
-      const faces = [" (・`ω´・)", " owo", " UwU", " >w<", " ^w^", " :3"];
-      let s = t
-        .replace(/(?:r|l)/g, "w")
-        .replace(/(?:R|L)/g, "W")
-        .replace(/n([aeiou])/g, "ny$1")
-        .replace(/N([aeiou])/g, "Ny$1")
-        .replace(/ove/g, "uv");
-      s = s.replace(/([.!?])\s*/g, (m, p) => p + faces[Math.floor(Math.random() * faces.length)] + " ");
-      return s.trim();
-    },
-  };
-
-  // ===========================================================================
-  // Message box (Slate editor) pre-send rewrite
-  // ===========================================================================
-  function getMessageBox() {
-    return document.querySelector('[data-slate-editor="true"]') || document.querySelector('div[role="textbox"]');
+  function _stores() {
+    if (!_UserStore || !_UserStore.getUser || !_UserStore.getCurrentUser) {
+      _UserStore = _findUserStore();
+    }
+    if (!_GuildMemberStore || !_GuildMemberStore.getMember) {
+      _GuildMemberStore =
+        findByPropsAll("getMember", "getMemberIds") ||
+        findByPropsAll("getMember", "isMember") ||
+        findByPropsAll("getMember", "getMembers");
+    }
+    return { U: _UserStore, G: _GuildMemberStore };
   }
 
-  // Replace the current message-box text with transform(currentText). Uses
-  // execCommand("insertText") so Slate processes it as real user input.
-  function applyTransformToInput(fn) {
-    const box = getMessageBox();
-    if (!box) {
-      log("transform: message box not found (focus a channel)");
-      return false;
-    }
-    box.focus();
-    const text = box.textContent || "";
+  function _parseAvatarSrc(s) {
+    let m = s.match(/\/guilds\/(\d+)\/users\/(\d+)\/avatars\//);
+    if (m) return { guildId: m[1], userId: m[2] };
+    m = s.match(/\/avatars\/(\d+)\//);
+    if (m) return { userId: m[1] };
+    return null;
+  }
+
+  // Pull a user id (+ guild id when present) out of whatever was right-clicked.
+  // Climb ancestors from the exact click target outward and use the FIRST element
+  // that encloses an avatar <img> — so it works no matter where in the row/header
+  // you click (name, status, blank padding), not just on the avatar itself.
+  function _userFromEvent(e) {
+    let userId = null;
+    let guildId = null;
     try {
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(box);
-      sel.removeAllRanges();
-      sel.addRange(range);
-      document.execCommand("insertText", false, fn(text));
-      return true;
-    } catch (e) {
-      warn("transform failed", String(e));
-      return false;
+      let node = e.target;
+      for (let i = 0; i < 8 && node && node !== document.body; i++) {
+        if (node.querySelector) {
+          const img =
+            node.querySelector('img[src*="/guilds/"][src*="/avatars/"]') ||
+            node.querySelector('img[src*="/avatars/"]');
+          if (img) {
+            const p = _parseAvatarSrc(img.src);
+            if (p && p.userId) {
+              userId = p.userId;
+              if (p.guildId) guildId = p.guildId;
+              break;
+            }
+          }
+        }
+        node = node.parentElement;
+      }
+    } catch (err) {}
+    if (!guildId) {
+      const um = location.pathname.match(/\/channels\/(\d+)\//);
+      if (um) guildId = um[1];
+    }
+    return { userId, guildId };
+  }
+
+  function _globalAvatarUrl(user) {
+    if (!user.avatar) {
+      let idx;
+      if (user.discriminator && user.discriminator !== "0") idx = parseInt(user.discriminator, 10) % 5;
+      else idx = Number((BigInt(user.id) >> 22n) % 6n);
+      return "https://cdn.discordapp.com/embed/avatars/" + idx + ".png";
+    }
+    return "https://cdn.discordapp.com/avatars/" + user.id + "/" + user.avatar + ".png?size=4096";
+  }
+  function _guildAvatarUrl(guildId, userId, hash) {
+    return "https://cdn.discordapp.com/guilds/" + guildId + "/users/" + userId + "/avatars/" + hash + ".png?size=4096";
+  }
+
+  async function _copyAvatar(url) {
+    try {
+      const res = await fetch(url);
+      let blob = await res.blob();
+      if (blob.type !== "image/png") {
+        const bmp = await createImageBitmap(blob);
+        const c = document.createElement("canvas");
+        c.width = bmp.width;
+        c.height = bmp.height;
+        c.getContext("2d").drawImage(bmp, 0, 0);
+        blob = await new Promise((r) => c.toBlob(r, "image/png"));
+      }
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      log("avatar copied → clipboard (" + url + ")");
+    } catch (err) {
+      warn("copy avatar failed", String(err));
     }
   }
 
-  // ===========================================================================
-  // Custom UI — minimal, modern, edgy. Black/white. Floating launcher + panel.
-  // ===========================================================================
-  function injectUIStyle() {
-    if (document.getElementById("dcmod-ui-style")) return;
+  function _injectMenuStyle() {
+    if (document.getElementById("dcmod-menu-style")) return;
     const s = document.createElement("style");
-    s.id = "dcmod-ui-style";
-    s.textContent = `
-      #dcmod-launcher {
-        position: fixed; right: 18px; bottom: 18px; z-index: 99999;
-        width: 38px; height: 38px; border-radius: 9px;
-        background: #000; color: #fff; border: 1px solid #2a2a2a;
-        font: 700 13px/38px ui-monospace,Menlo,Consolas,monospace; text-align: center;
-        cursor: pointer; user-select: none; letter-spacing: .5px;
-        box-shadow: 0 4px 18px rgba(0,0,0,.5); transition: transform .12s, border-color .12s;
-      }
-      #dcmod-launcher:hover { transform: translateY(-2px); border-color: #fff; }
-      #dcmod-panel {
-        position: fixed; right: 18px; bottom: 66px; z-index: 99999;
-        width: 286px; max-height: 70vh; overflow-y: auto;
-        background: #0a0a0a; color: #fff; border: 1px solid #2a2a2a; border-radius: 12px;
-        padding: 14px; display: none; font-family: ui-monospace,Menlo,Consolas,monospace;
-        box-shadow: 0 10px 40px rgba(0,0,0,.6);
-      }
-      #dcmod-panel.open { display: block; }
-      .dcmod-h {
-        font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
-        color: #666; margin: 14px 0 8px; border-bottom: 1px solid #1c1c1c; padding-bottom: 5px;
-      }
-      .dcmod-h:first-child { margin-top: 0; }
-      .dcmod-title { font-size: 13px; font-weight: 700; letter-spacing: 3px; margin-bottom: 2px; }
-      .dcmod-sub { font-size: 9px; color: #555; letter-spacing: 1px; margin-bottom: 6px; }
-      .dcmod-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-      .dcmod-btn {
-        background: transparent; color: #ddd; border: 1px solid #333; border-radius: 7px;
-        padding: 7px 6px; font: 600 11px ui-monospace,Menlo,Consolas,monospace; cursor: pointer;
-        transition: all .1s; text-align: center;
-      }
-      .dcmod-btn:hover { background: #fff; color: #000; border-color: #fff; }
-      .dcmod-btn.wide { grid-column: 1 / -1; }
-      .dcmod-btn.on { background: #fff; color: #000; }
-      .dcmod-note { font-size: 9px; color: #444; margin-top: 10px; line-height: 1.4; }
-    `;
+    s.id = "dcmod-menu-style";
+    // Mirror Discord's own menuitem hover highlight (our cloned item is inert, so
+    // Discord's JS-driven focus class never lands on it — give it CSS feedback).
+    s.textContent = `.dcmod-menuitem:hover { background: var(--background-modifier-hover, rgba(255,255,255,.06)) !important; cursor: pointer; }`;
     document.head.appendChild(s);
   }
 
-  function installUI() {
-    if (document.getElementById("dcmod-launcher")) return;
-    injectUIStyle();
+  // Find an open user context menu (one containing a "Copy User ID" item).
+  function _findUserMenu() {
+    const menus = document.querySelectorAll('[role="menu"]');
+    for (const m of menus) {
+      const items = m.querySelectorAll('[role="menuitem"]');
+      for (const it of items) {
+        const t = (it.textContent || "").trim();
+        if (t === "Copy User ID" || t.indexOf("Copy User ID") === 0) return { menu: m, anchor: it };
+      }
+    }
+    return null;
+  }
 
-    const launcher = document.createElement("div");
-    launcher.id = "dcmod-launcher";
-    launcher.textContent = "DC";
-    launcher.title = "DiscordMod";
-
-    const panel = document.createElement("div");
-    panel.id = "dcmod-panel";
-
-    const mkBtn = (label, onClick, opts) => {
-      const b = document.createElement("div");
-      b.className = "dcmod-btn" + (opts && opts.wide ? " wide" : "");
-      b.textContent = label;
-      b.addEventListener("click", onClick);
-      return b;
-    };
-    const mkHeader = (t) => {
-      const h = document.createElement("div");
-      h.className = "dcmod-h";
-      h.textContent = t;
-      return h;
-    };
-    const mkGrid = (btns) => {
-      const g = document.createElement("div");
-      g.className = "dcmod-grid";
-      btns.forEach((b) => g.appendChild(b));
-      return g;
-    };
-
-    // Title
-    const title = document.createElement("div");
-    title.className = "dcmod-title";
-    title.textContent = "DISCORDMOD";
-    panel.appendChild(title);
-    const sub = document.createElement("div");
-    sub.className = "dcmod-sub";
-    sub.textContent = "client mod · pre-send";
-    panel.appendChild(sub);
-
-    // Text transforms — rewrite the message box, then you hit Enter.
-    panel.appendChild(mkHeader("text · transforms current input"));
-    const tnames = [
-      ["vaporwave", "vaporwave"],
-      ["sᴍᴀʟʟᴄᴀᴘs", "smallcaps"],
-      ["𝕕𝕤𝕥𝕣𝕦𝕔𝕜", "doublestruck"],
-      ["𝓼𝓬𝓻𝓲𝓹𝓽", "script"],
-      ["𝐛𝐨𝐥𝐝", "bold"],
-      ["🇧🇮🇬", "bigtext"],
-      ["s‖p‖oiler", "spoilerify"],
-      ["z̸a̸l̸g̸o̸", "zalgo"],
-      ["owoify", "owoify"],
-    ];
-    panel.appendChild(
-      mkGrid(tnames.map(([label, key]) => mkBtn(label, () => applyTransformToInput(transforms[key]))))
-    );
-
-    // Deleted-message viewer
-    panel.appendChild(mkHeader("deleted viewer"));
-    const toggleBtn = mkBtn(enabled ? "viewer: ON" : "viewer: OFF", () => {
-      const now = window.DCMod.toggleDeleted();
-      toggleBtn.textContent = now ? "viewer: ON" : "viewer: OFF";
-      toggleBtn.classList.toggle("on", now);
+  function _makeItem(anchor, label, onClick) {
+    const it = anchor.cloneNode(true); // identical classes → identical size/styling
+    it.id = "dcmod-" + label.replace(/\s+/g, "-").toLowerCase();
+    it.classList.add("dcmod-menuitem");
+    const lab = it.querySelector('[class*="label"]');
+    if (lab) lab.textContent = label;
+    else it.textContent = label;
+    it.setAttribute("aria-label", label);
+    const ic = it.querySelector('[class*="iconContainer"]'); // strip the [ID] badge
+    if (ic) ic.remove();
+    it.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      onClick();
+      try {
+        if (_dispatcher) _dispatcher.dispatch({ type: "CONTEXT_MENU_CLOSE" });
+      } catch (e) {}
     });
-    toggleBtn.classList.toggle("on", enabled);
-    const clearBtn = mkBtn("clear all", () => window.DCMod.clearDeleted());
-    panel.appendChild(mkGrid([toggleBtn, clearBtn]));
+    return it;
+  }
 
-    const note = document.createElement("div");
-    note.className = "dcmod-note";
-    note.textContent = "transforms rewrite your draft — press Enter to send. shift+right-click a red (deleted) message to remove it.";
-    panel.appendChild(note);
+  function _tryInjectAvatarItem() {
+    const found = _findUserMenu();
+    if (!found) return false; // menu not open yet → keep polling
+    if (found.menu.querySelector(".dcmod-menuitem")) return true; // already injected
+    const info = _pendingUser || {};
+    if (!info.userId) return true; // couldn't resolve a user → give up quietly
+    const { U, G } = _stores();
+    const user = U && U.getUser && U.getUser(info.userId);
+    if (!user) return true;
+    const member = info.guildId && G && G.getMember && G.getMember(info.guildId, info.userId);
+    const hasServer = member && member.avatar;
+    const items = [];
+    if (hasServer) {
+      items.push(_makeItem(found.anchor, "Copy Server Avatar", () => _copyAvatar(_guildAvatarUrl(info.guildId, info.userId, member.avatar))));
+      items.push(_makeItem(found.anchor, "Copy Avatar", () => _copyAvatar(_globalAvatarUrl(user))));
+    } else {
+      items.push(_makeItem(found.anchor, "Copy Avatar", () => _copyAvatar(_globalAvatarUrl(user))));
+    }
+    let ref = found.anchor;
+    for (const it of items) {
+      ref.parentNode.insertBefore(it, ref.nextSibling);
+      ref = it;
+    }
+    log("Copy Avatar injected (server=" + !!hasServer + ")");
+    return true;
+  }
 
-    launcher.addEventListener("click", () => panel.classList.toggle("open"));
-    document.body.appendChild(launcher);
-    document.body.appendChild(panel);
-    log("UI installed");
+  function installAvatarMenu() {
+    if (window.__DCMOD_AVATAR__) return;
+    window.__DCMOD_AVATAR__ = true;
+    _injectMenuStyle();
+    document.addEventListener(
+      "contextmenu",
+      (e) => {
+        try {
+          _pendingUser = _userFromEvent(e);
+          if (_pendingUser && _pendingUser.userId) {
+            // Menu renders a frame or two after the event — poll briefly, then stop.
+            let tries = 0;
+            const tick = () => {
+              if (_tryInjectAvatarItem()) return;
+              if (++tries < 30) requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          }
+        } catch (err) {}
+      },
+      true // CAPTURE: Discord stopsPropagation on user rows, so bubble never reaches us
+    );
+    log("Copy Avatar menu handler installed");
   }
 
   // ---------------------------------------------------------------------------
@@ -922,14 +1005,26 @@
       log("deleted-message viewer:", enabled ? "ON" : "OFF");
       return enabled;
     },
+    // Telemetry blocking: on by default. Returns current count of dropped events.
+    noTrack(on) {
+      if (on !== undefined) _noTrack = !!on;
+      log("telemetry blocking " + (_noTrack ? "ON" : "OFF") + " — blocked so far: " + _telBlocked);
+      return { enabled: _noTrack, blocked: _telBlocked };
+    },
+    // Collapse UI transition latency. Default ON. DCMod.fastUI(false) restores vanilla feel.
+    fastUI(on) {
+      if (on !== undefined) _fastUI = !!on;
+      injectSpeedStyle();
+      log("fast UI (instant transitions) " + (_fastUI ? "ON" : "OFF"));
+      return _fastUI;
+    },
     clearDeleted() {
       document.querySelectorAll(".dcmod-deleted").forEach((el) => el.classList.remove("dcmod-deleted"));
       deletedIds.clear();
+      _rowCache.clear();
       log("cleared tracked deletions");
     },
     removeLocal: (id) => removeLocal(id),
-    transforms,
-    transform: (name) => applyTransformToInput(transforms[name]),
     diag: () => diag(),
     perf() {
       const s = perfSnapshot();
@@ -960,6 +1055,7 @@
     // through both windows for a valid comparison.
     bench(secs) {
       secs = secs || 20;
+      _measuring = true; // turn on perf timing for the benchmark window
       this.setActive(true);
       perfReset();
       log("bench: phase ON for " + secs + "s — keep scrolling/using normally");
@@ -987,6 +1083,7 @@
         log("autoBench: no message scroller found — open a channel with messages first");
         return "no scroller";
       }
+      _measuring = true; // turn on perf timing for the benchmark window
       const self = this;
       const origTop = scroller.scrollTop;
       log("autoBench: scroller scrollHeight=" + scroller.scrollHeight + " — phase ON " + secs + "s");
@@ -1015,8 +1112,12 @@
   // ---------------------------------------------------------------------------
   // Patient boot: webpack only becomes grabbable AFTER login (the app must be
   // fully loaded). We poll slowly for up to ~5 min and stay quiet until ready.
-  const POLL_MS = 500;
   const MAX_ATTEMPTS = 600;
+  // Poll fast for the first ~3s (catch webpack the instant it boots), then widen
+  // to 500ms so we don't keep a steady high-frequency timer for up to 5 minutes.
+  function pollDelay(attempt) {
+    return attempt < 20 ? 150 : 500;
+  }
 
   function chunkLen() {
     const c = window.webpackChunkdiscord_app;
@@ -1036,10 +1137,11 @@
     const haveAny = allRequires().length > 0 || !!wreq;
     if (!haveAny) {
       if (attempt % 20 === 0) log("waiting for webpack…", { attempt, chunkLen: chunkLen(), captured: _wreqs.size, pushes: _pushCount });
-      return setTimeout(() => boot(attempt + 1), POLL_MS);
+      return setTimeout(() => boot(attempt + 1), pollDelay(attempt));
     }
 
     injectStyle();
+    injectSpeedStyle();
     if (!installDispatcherHook(wreq)) {
       if (attempt % 20 === 0) {
         let maxC = 0;
@@ -1050,19 +1152,19 @@
         });
         log("searching for dispatcher…", { attempt, captured: _wreqs.size, maxCache: maxC });
       }
-      return setTimeout(() => boot(attempt + 1), POLL_MS);
+      return setTimeout(() => boot(attempt + 1), pollDelay(attempt));
     }
 
     installObserver();
     installContextMenu();
+    installAvatarMenu();
     hookOutgoingDeletes();
-    installUI();
     restoreM(); // dispatcher captured — stop taxing every Function .m read
     log("ready ✓  (toggle with DCMod.toggleDeleted())");
     diag(); // auto-dump state so the log file is self-sufficient
     // Passive baseline: measure our idle overhead for 30s, dump once.
     perfReset();
-    setTimeout(() => log("perf baseline " + JSON.stringify(perfSnapshot())), 30000);
+    setTimeout(() => log("perf baseline " + JSON.stringify(perfSnapshot()) + " noTrack=" + _noTrack + " telBlocked=" + _telBlocked), 30000);
   }
 
   // Manual diagnostic — run DCMod.diag() in the console.
