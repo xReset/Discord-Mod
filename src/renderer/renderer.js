@@ -38,6 +38,99 @@
   let _msgActionLog = 0;
   let _loggedCandidates = false;
   let _hookMode = "";
+  let _hooksActive = true; // A/B switch for benchmarking (DCMod.setActive)
+
+  // ---------------------------------------------------------------------------
+  // Perf harness — measures OUR self-imposed overhead so optimizations are
+  // verifiable. longtask = main-thread task >50ms (Chromium). int* = our
+  // interceptor; obs* = our mutation-observer apply pass.
+  // ---------------------------------------------------------------------------
+  const _perf = { intMs: 0, intN: 0, obsMs: 0, obsN: 0, ltN: 0, ltMs: 0, since: 0 };
+  try {
+    _perf.since = performance.now();
+    new PerformanceObserver((l) => {
+      for (const e of l.getEntries()) {
+        _perf.ltN++;
+        _perf.ltMs += e.duration;
+      }
+    }).observe({ entryTypes: ["longtask"] });
+  } catch (e) {}
+
+  function perfSnapshot() {
+    const dt = Math.max(0.001, (performance.now() - _perf.since) / 1000);
+    return {
+      sec: +dt.toFixed(1),
+      hooks: _hooksActive ? "ON" : "OFF",
+      longtasks: _perf.ltN,
+      longtaskMs: +_perf.ltMs.toFixed(0),
+      ltPerMin: +((_perf.ltN / dt) * 60).toFixed(1),
+      blockMsPerMin: +((_perf.ltMs / dt) * 60).toFixed(0),
+      intN: _perf.intN,
+      intMs: +_perf.intMs.toFixed(1),
+      obsN: _perf.obsN,
+      obsMs: +_perf.obsMs.toFixed(1),
+    };
+  }
+
+  function perfReset() {
+    _perf.intMs = _perf.intN = _perf.obsMs = _perf.obsN = _perf.ltN = _perf.ltMs = 0;
+    _perf.since = performance.now();
+  }
+
+  // Locate the chat message scroller (the scrollable element that contains
+  // message-content nodes). Used by the scripted scroll benchmark.
+  function findScroller() {
+    const msgs = document.querySelectorAll('[id^="message-content-"]');
+    if (!msgs.length) {
+      log("findScroller: 0 message-content nodes (not in a channel?)");
+      return null;
+    }
+    // Walk up from a message node to the nearest actually-scrollable ancestor.
+    let node = msgs[msgs.length - 1].parentElement;
+    let best = null,
+      bestH = 0;
+    while (node && node !== document.body) {
+      try {
+        const oy = getComputedStyle(node).overflowY;
+        const scrollable = oy === "auto" || oy === "scroll";
+        if (scrollable && node.scrollHeight > node.clientHeight + 20 && node.scrollHeight > bestH) {
+          bestH = node.scrollHeight;
+          best = node;
+        }
+      } catch (e) {}
+      node = node.parentElement;
+    }
+    if (!best) {
+      // Fallback: largest scrollable div anywhere that contains a message node.
+      for (const el of document.querySelectorAll("div")) {
+        try {
+          if (el.scrollHeight > el.clientHeight + 20 && el.querySelector('[id^="message-content-"]') && el.scrollHeight > bestH) {
+            bestH = el.scrollHeight;
+            best = el;
+          }
+        } catch (e) {}
+      }
+    }
+    log("findScroller: msgNodes=" + msgs.length + " chosenScrollH=" + bestH);
+    return best;
+  }
+
+  // Drive a deterministic triangle-wave scroll for `secs` so both A/B phases see
+  // the IDENTICAL workload (manual scrolling is not reproducible).
+  function scrollFor(scroller, secs, done) {
+    const start = performance.now();
+    const dur = secs * 1000;
+    function step() {
+      const t = performance.now() - start;
+      const max = Math.max(1, scroller.scrollHeight - scroller.clientHeight);
+      const phase = (t % 4000) / 4000;
+      const tri = phase < 0.5 ? phase * 2 : 2 - phase * 2;
+      scroller.scrollTop = tri * max;
+      if (t < dur) requestAnimationFrame(step);
+      else done();
+    }
+    requestAnimationFrame(step);
+  }
   const _wreqs = new Set();
   (function captureRequires() {
     try {
@@ -63,6 +156,15 @@
       warn("m-capture failed", String(e));
     }
   })();
+
+  // Remove our Function.prototype.m accessor once we no longer need to capture
+  // new requires (we have the dispatcher). Requires that already set own `.m`
+  // keep their data property; this just stops taxing every `.m` read globally.
+  function restoreM() {
+    try {
+      delete Function.prototype.m;
+    } catch (e) {}
+  }
 
   // All candidate requires (captured entrypoint requires + the push-grabbed one).
   function allRequires() {
@@ -273,33 +375,13 @@
     if (document.getElementById("dcmod-style")) return;
     const style = document.createElement("style");
     style.id = "dcmod-style";
+    // Red text only — no "(deleted)" label, no inline button. Right-click a red
+    // message to remove it locally (see installContextMenu).
     style.textContent = `
       .dcmod-deleted,
       .dcmod-deleted * {
         color: #f04747 !important;
       }
-      .dcmod-deleted::after {
-        content: " (deleted)";
-        color: #f04747;
-        font-size: 0.7rem;
-        font-weight: 600;
-        opacity: 0.85;
-      }
-      .dcmod-deleted { position: relative; }
-      .dcmod-x {
-        cursor: pointer;
-        margin-left: 6px;
-        padding: 0 4px;
-        font-size: 0.7rem;
-        font-weight: 700;
-        color: #fff;
-        background: #f04747;
-        border-radius: 3px;
-        opacity: 0;
-        transition: opacity .1s;
-        user-select: none;
-      }
-      .dcmod-deleted:hover .dcmod-x { opacity: 1; }
     `;
     document.head.appendChild(style);
   }
@@ -316,19 +398,6 @@
     const content = document.getElementById("message-content-" + id);
     if (!content || content.classList.contains("dcmod-deleted")) return;
     content.classList.add("dcmod-deleted");
-    // Add a hover ✕ to actually remove this message from our local view.
-    if (!content.querySelector(".dcmod-x")) {
-      const x = document.createElement("span");
-      x.className = "dcmod-x";
-      x.textContent = "✕";
-      x.title = "DCMod: remove this deleted message from view";
-      x.addEventListener("click", (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        removeLocal(id);
-      });
-      content.appendChild(x);
-    }
   }
 
   function applyAll() {
@@ -340,6 +409,7 @@
     if (!id) return;
     deletedIds.add(id);
     if (action) deletedActions.set(id, action);
+    ensureObserver(); // start maintaining styling now that we have a deletion
     // Apply now and again after Discord finishes its own render pass.
     applyOne(id);
     requestAnimationFrame(() => applyOne(id));
@@ -354,6 +424,7 @@
     if (el) el.classList.remove("dcmod-deleted");
     const action = deletedActions.get(id);
     deletedActions.delete(id);
+    stopObserverIfIdle();
     try {
       if (_dispatcher && action) _dispatcher.dispatch(action);
       else if (el) {
@@ -385,26 +456,36 @@
     // it → the store never sees MESSAGE_DELETE → the message keeps rendering.
     // This runs on the REAL dispatch path even if `Dispatcher` is a facade.
     function interceptor(action) {
+      if (!_hooksActive) return false; // benchmark A/B: near-zero cost when off
+      const _t0 = performance.now();
+      let result = false;
       try {
-        if (action && typeof action.type === "string" && action.type.indexOf("MESSAGE") !== -1 && _msgActionLog < 80) {
-          _msgActionLog++;
-          log("action type=" + action.type + " keys=[" + Object.keys(action).slice(0, 12).join(",") + "]");
-        }
-        if (enabled && action) {
-          if (action.type === "MESSAGE_DELETE" && !allowDelete.has(action.id)) {
-            markDeleted(action.id, action);
-            return true; // block removal
+        // Cheap gate first: only message-delete actions matter. Avoid all string
+        // work (Object.keys etc.) for the ~thousands of other dispatches.
+        const type = action && action.type;
+        if (type === "MESSAGE_DELETE" || type === "MESSAGE_DELETE_BULK") {
+          if (_msgActionLog < 80) {
+            _msgActionLog++;
+            log("action type=" + type + " keys=[" + Object.keys(action).slice(0, 12).join(",") + "]");
           }
-          if (action.type === "MESSAGE_DELETE_BULK" && Array.isArray(action.ids)) {
-            const block = action.ids.filter((x) => !allowDelete.has(x));
-            block.forEach((x) => markDeleted(x, { type: "MESSAGE_DELETE", id: x, channelId: action.channelId, guildId: action.guildId }));
-            if (block.length === action.ids.length) return true; // block all
+          if (enabled) {
+            if (type === "MESSAGE_DELETE" && !allowDelete.has(action.id)) {
+              markDeleted(action.id, action);
+              result = true; // block removal
+            } else if (type === "MESSAGE_DELETE_BULK" && Array.isArray(action.ids)) {
+              const block = action.ids.filter((x) => !allowDelete.has(x));
+              block.forEach((x) => markDeleted(x, { type: "MESSAGE_DELETE", id: x, channelId: action.channelId, guildId: action.guildId }));
+              if (block.length === action.ids.length) result = true; // block all
+            }
           }
         }
       } catch (e) {
         warn("interceptor error", String(e));
+      } finally {
+        _perf.intMs += performance.now() - _t0;
+        _perf.intN++;
       }
-      return false;
+      return result;
     }
 
     if (typeof Dispatcher.addInterceptor === "function") {
@@ -425,9 +506,62 @@
   }
 
   // Re-apply red styling when Discord re-renders / virtualizes the message list.
+  //
+  // PERF: the naive "observe document.body subtree, run applyAll on every mutation"
+  // is a constant main-thread tax — Discord mutates the DOM continuously. Instead:
+  //   - only observe while there ARE deleted messages to maintain (disconnect when 0),
+  //   - coalesce bursts to ONE applyAll per animation frame.
+  // So with no deletions tracked (the common case) we cost nothing.
+  let _obs = null;
+  let _rafScheduled = false;
+
+  function scheduleApply() {
+    if (_rafScheduled) return;
+    _rafScheduled = true;
+    requestAnimationFrame(() => {
+      _rafScheduled = false;
+      const t = performance.now();
+      applyAll();
+      _perf.obsMs += performance.now() - t;
+      _perf.obsN++;
+    });
+  }
+
+  function ensureObserver() {
+    if (_obs || !_hooksActive || deletedIds.size === 0) return;
+    _obs = new MutationObserver(scheduleApply);
+    _obs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function stopObserverIfIdle() {
+    if (_obs && deletedIds.size === 0) {
+      _obs.disconnect();
+      _obs = null;
+    }
+  }
+
   function installObserver() {
-    const obs = new MutationObserver(() => applyAll());
-    obs.observe(document.body, { childList: true, subtree: true });
+    ensureObserver(); // no-op until first deletion
+  }
+
+  // Right-click a preserved (red) deleted message → remove it from our local view
+  // for good (replays the real delete via removeLocal). We only swallow the native
+  // context menu for messages WE'RE preserving; all other right-clicks pass through.
+  function installContextMenu() {
+    document.addEventListener(
+      "contextmenu",
+      (e) => {
+        try {
+          const node = e.target && e.target.closest ? e.target.closest('[id^="message-content-"]') : null;
+          if (!node || !node.classList.contains("dcmod-deleted")) return; // normal Discord menu
+          const id = node.id.slice("message-content-".length);
+          e.preventDefault();
+          e.stopPropagation();
+          removeLocal(id);
+        } catch (err) {}
+      },
+      true // capture: beat Discord's own handler
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -446,6 +580,83 @@
     },
     removeLocal: (id) => removeLocal(id),
     diag: () => diag(),
+    perf() {
+      const s = perfSnapshot();
+      log("perf " + JSON.stringify(s));
+      return s;
+    },
+    perfReset() {
+      perfReset();
+      log("perf reset");
+    },
+    // Enable/disable our hooks at runtime (interceptor early-outs, observer
+    // disconnects) so you can A/B our overhead in the SAME session/activity.
+    setActive(b) {
+      _hooksActive = !!b;
+      if (!_hooksActive) {
+        if (_obs) {
+          _obs.disconnect();
+          _obs = null;
+        }
+      } else {
+        ensureObserver();
+      }
+      log("hooks " + (_hooksActive ? "ON" : "OFF"));
+      return _hooksActive;
+    },
+    // Automated A/B: measure `secs` with hooks ON, then `secs` with hooks OFF,
+    // print both snapshots. Do the SAME activity (e.g. scroll a busy channel)
+    // through both windows for a valid comparison.
+    bench(secs) {
+      secs = secs || 20;
+      this.setActive(true);
+      perfReset();
+      log("bench: phase ON for " + secs + "s — keep scrolling/using normally");
+      setTimeout(() => {
+        const on = perfSnapshot();
+        log("bench ON " + JSON.stringify(on));
+        this.setActive(false);
+        perfReset();
+        log("bench: phase OFF for " + secs + "s — repeat the SAME activity");
+        setTimeout(() => {
+          const off = perfSnapshot();
+          log("bench OFF " + JSON.stringify(off));
+          log("bench DELTA ltPerMin on=" + on.ltPerMin + " off=" + off.ltPerMin + " | blockMsPerMin on=" + on.blockMsPerMin + " off=" + off.blockMsPerMin);
+          this.setActive(true);
+        }, secs * 1000);
+      }, secs * 1000);
+      return "running " + secs * 2 + "s — mirror your activity across both phases";
+    },
+    // Reproducible benchmark: scripted identical scroll for `secs` with hooks ON,
+    // then `secs` with hooks OFF. Open a busy channel first. Results auto-logged.
+    autoBench(secs) {
+      secs = secs || 15;
+      const scroller = findScroller();
+      if (!scroller) {
+        log("autoBench: no message scroller found — open a channel with messages first");
+        return "no scroller";
+      }
+      const self = this;
+      const origTop = scroller.scrollTop;
+      log("autoBench: scroller scrollHeight=" + scroller.scrollHeight + " — phase ON " + secs + "s");
+      self.setActive(true);
+      perfReset();
+      scrollFor(scroller, secs, () => {
+        const on = perfSnapshot();
+        log("autoBench ON " + JSON.stringify(on));
+        self.setActive(false);
+        perfReset();
+        log("autoBench: phase OFF " + secs + "s");
+        scrollFor(scroller, secs, () => {
+          const off = perfSnapshot();
+          log("autoBench OFF " + JSON.stringify(off));
+          log("autoBench RESULT ltPerMin on=" + on.ltPerMin + " off=" + off.ltPerMin + " | blockMsPerMin on=" + on.blockMsPerMin + " off=" + off.blockMsPerMin + " | ourMs on=" + (on.intMs + on.obsMs).toFixed(1));
+          self.setActive(true);
+          scroller.scrollTop = origTop;
+        });
+      });
+      return "autoBench running " + secs * 2 + "s (scripted scroll)";
+    },
   };
 
   // ---------------------------------------------------------------------------
@@ -492,8 +703,13 @@
     }
 
     installObserver();
+    installContextMenu();
+    restoreM(); // dispatcher captured — stop taxing every Function .m read
     log("ready ✓  (toggle with DCMod.toggleDeleted())");
     diag(); // auto-dump state so the log file is self-sufficient
+    // Passive baseline: measure our idle overhead for 30s, dump once.
+    perfReset();
+    setTimeout(() => log("perf baseline " + JSON.stringify(perfSnapshot())), 30000);
   }
 
   // Manual diagnostic — run DCMod.diag() in the console.

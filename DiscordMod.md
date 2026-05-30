@@ -37,17 +37,20 @@ They are **complementary**, not overlapping.
 
 ## First feature (the "test"): Deleted-message viewer
 
-Goal: when any message is deleted in a channel the user is viewing, it should **stay visible,
-painted red with a `(deleted)` tag** instead of vanishing — so the user always sees what was deleted,
-clearly signalled (not a vanilla message).
+Goal: when any message is deleted in a channel the user is viewing (including the user's own),
+it should **stay visible, painted red** instead of vanishing — so the user always sees what was
+deleted. **Right-click a red message to remove it locally** (fully gets rid of it on this client).
 
-**How it works:** the renderer grabs Discord's internal Flux dispatcher and adds an *interceptor*.
-On `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` it records the message id and **returns `true` to block
-the removal**, so Discord never takes the message out of the store/DOM. A CSS class + a
-`MutationObserver` then paint the message content red and re-apply the styling when Discord
-re-renders / virtualizes the list on scroll.
+**How it works (build 1.0.9239):** the renderer captures Discord's real webpack require via a
+`Function.prototype.m` setter hook at inject time (the chunk-push require misses the entrypoint
+modules), finds the **real** FluxDispatcher instance (scored by internal `_`-fields, not a facade),
+and adds an `addInterceptor`. On `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` it records the id and
+**returns `true` to block the removal**, so Discord never takes the message out of the store/DOM.
+A CSS class + a (lazy, idle-free) `MutationObserver` paint the content red and re-apply on
+re-render/virtualization. See `AGENT_NOTES.md` for the full hard-won internals + perf notes.
 
-Console controls (DevTools console): `DCMod.toggleDeleted()`, `DCMod.clearDeleted()`.
+Console controls (DevTools console): `DCMod.toggleDeleted()`, `DCMod.clearDeleted()`,
+`DCMod.removeLocal(id)`, plus perf/benchmark: `DCMod.perf()`, `DCMod.autoBench()`.
 
 ---
 

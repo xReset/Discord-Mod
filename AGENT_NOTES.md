@@ -156,6 +156,40 @@ Real action shapes (build 1.0.9239):
 - `MESSAGE_DELETE_BULK` = `{type,...,ids}`.
 - `addInterceptor(cb)`: return `true` to DROP the action (keeps message). Confirmed working.
 
+## DOM / UX niches (build 1.0.9239)
+
+- **Deleted message styling target:** the message text node has DOM id
+  `message-content-<messageId>`. We add class `dcmod-deleted` (red text only — no label).
+  Confirmed stable; it's how we both style and locate messages.
+- **Right-click removal:** a `contextmenu` listener in CAPTURE phase
+  (`addEventListener("contextmenu", fn, true)`) beats Discord's own handler. We only
+  `preventDefault()` for nodes that are `.dcmod-deleted` (preserved messages) — every other
+  right-click passes through to Discord untouched. Don't swallow globally.
+- **Local removal = replay the real delete:** `removeLocal(id)` adds the id to `allowDelete`
+  then re-dispatches the stored `MESSAGE_DELETE` through the dispatcher; the interceptor sees
+  it's allow-listed and lets it pass → store drops it → gone from view. (These messages are
+  already deleted server-side, so there's nothing to delete on Discord's end.)
+
+## Performance (must stay light — user runs many servers)
+
+- **Our self-overhead is ~0 at idle** (measured: interceptor ~0.7ms + observer ~0.7ms over 30s).
+  The dominant long-task time in the log is Discord itself, not us. Keep it that way.
+- **MutationObserver discipline:** only observe while `deletedIds.size > 0`; disconnect when it
+  hits 0; coalesce to ONE `applyAll` per `requestAnimationFrame`. Never re-add a `document.body`
+  `{subtree:true}` observer that runs on every mutation — that was the tax.
+- **`Function.prototype.m` accessor is REMOVED after boot** (`restoreM()`), so it doesn't tax
+  every `.m` read for the whole session. Only needed during capture.
+- **Known scaling risk:** blocking `MESSAGE_DELETE` keeps messages in the store + DOM forever.
+  Over a long session across many servers this is unbounded memory/DOM growth. Future: cap
+  retained deletions per channel, or prune on channel switch. Not yet implemented.
+- **Benchmark tools (in renderer, console):** `DCMod.perf()` snapshot; `DCMod.setActive(bool)`
+  A/B toggle; `DCMod.autoBench(secs)` = scripted identical triangle-wave scroll with hooks ON
+  then OFF, logs `autoBench RESULT` comparing `ltPerMin`/`blockMsPerMin`. `longtask` = main-thread
+  task >50ms (Chromium PerformanceObserver). NOTE: DevTools being OPEN inflates these numbers a lot
+  — for a clean read, run autoBench, then check the log (don't trust numbers with DevTools perf
+  profiler active). `findScroller` walks up from a `message-content-` node to the nearest scrollable
+  ancestor; needs a channel with messages visible.
+
 ## Changelog (append one line per session)
 
 - 2026-05-30: Created this file. Rewrote dispatcher discovery (deep export scan + brute-execute all
@@ -163,4 +197,7 @@ Real action shapes (build 1.0.9239):
   fixed per-key getter try/catch. Restart-loop iteration confirmed; hot-reload confirmed dead.
 - 2026-05-30: SOLVED. Function.prototype.m capture → real require (~7700 modules). Score-pick real
   dispatcher (not facade) by `_`-fields. addInterceptor block. Deleted messages persist. ✅ committed.
-  Next: performance benchmarking + optimization (modded client feels slower than vanilla).
+- 2026-05-30: UX + perf pass. Red-only (dropped "(deleted)" label + hover-✕). Right-click red msg →
+  removeLocal (capture-phase contextmenu). Lazy MutationObserver (disconnect when no deletions,
+  rAF-coalesced). restoreM() after boot. Perf harness + scripted-scroll autoBench A/B. Our idle
+  overhead measured ~0. Robust findScroller. Noted unbounded-retention scaling risk for many servers.
