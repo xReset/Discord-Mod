@@ -1,5 +1,9 @@
 # AGENT_NOTES — read FIRST, update LAST (every session)
 
+> **New here / smaller model? Read `WORKFLOW.md` first** — the safe edit→check→restart→verify loop,
+> the helper scripts in `tools/`, and the rules that keep you from breaking the live client.
+
+
 > **Mandate for any AI agent working in `E:\DiscordMod`:**
 > 1. **Read this file before doing anything else.** It exists so you don't re-burn tokens
 >    rediscovering Discord-client quirks we already paid for.
