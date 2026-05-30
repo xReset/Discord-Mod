@@ -190,6 +190,18 @@ Real action shapes (build 1.0.9239):
   profiler active). `findScroller` walks up from a `message-content-` node to the nearest scrollable
   ancestor; needs a channel with messages visible.
 
+## Benchmark result (2026-05-30, autoBench, 15s scripted scroll/phase)
+
+`autoBench RESULT ltPerMin on=24 off=67.6 | blockMsPerMin on=6401 off=17779 | ourMs on=0.5`
+
+- Our hooks cost **0.5ms over 15s** — negligible. Hooks ON was not slower than OFF (ON actually
+  showed fewer longtasks — run-order/layout-warming variance, not our code).
+- **Conclusion: the mod is not the perf bottleneck.** Absolute longtask numbers were inflated
+  because DevTools console was open during the run (profiler taxes the main thread). For a real
+  feel-test, close DevTools.
+- Method note: autoBench runs ON phase first, OFF second; second pass can differ (warm caches,
+  different rendered content). For rigor, run autoBench 2-3× and average, DevTools closed.
+
 ## Changelog (append one line per session)
 
 - 2026-05-30: Created this file. Rewrote dispatcher discovery (deep export scan + brute-execute all
