@@ -203,6 +203,15 @@ Real action shapes (build 1.0.9239):
 - Method note: autoBench runs ON phase first, OFF second; second pass can differ (warm caches,
   different rendered content). For rigor, run autoBench 2-3× and average, DevTools closed.
 
+## Next work + corrected UX model → see PLAN.md
+
+Panel buttons must be TOGGLES for persistent ambient outgoing modes (owoify-on, autoanimate-on,
+visual-style), applied automatically at SEND time by wrapping `sendMessage` — NOT one-shot draft
+rewrites (current transform buttons use the wrong model; repurpose them). Plus permtyping +
+settings UI for server/channel IDs + localStorage persistence. Full plan + undocumented hooks
+(MessageActions aggregate has sendMessage/editMessage; Slate box selector; double-boot guard
+requirement; restart caveat) are in `PLAN.md`.
+
 ## Changelog (append one line per session)
 
 - 2026-05-30: Created this file. Rewrote dispatcher discovery (deep export scan + brute-execute all
