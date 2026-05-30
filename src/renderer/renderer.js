@@ -375,12 +375,17 @@
     if (document.getElementById("dcmod-style")) return;
     const style = document.createElement("style");
     style.id = "dcmod-style";
-    // Red text only — no "(deleted)" label, no inline button. Right-click a red
-    // message to remove it locally (see installContextMenu).
+    // Red text + a red marker on the whole row (so embed/gif-only messages, which
+    // have no text in message-content, are still visibly preserved + targetable).
+    // Shift+right-click a red row to remove it locally (see installContextMenu).
     style.textContent = `
       .dcmod-deleted,
       .dcmod-deleted * {
         color: #f04747 !important;
+      }
+      .dcmod-deleted-row {
+        box-shadow: inset 2px 0 0 #f04747 !important;
+        background: rgba(240, 71, 71, 0.06) !important;
       }
     `;
     document.head.appendChild(style);
@@ -394,10 +399,30 @@
   let enabled = true;
   let _dispatcher = null;
 
-  function applyOne(id) {
+  // Locate the text node AND the message row for a message id. Gif/embed-only
+  // messages may have no message-content text node, so we also find the row by id.
+  function elsFor(id) {
     const content = document.getElementById("message-content-" + id);
-    if (!content || content.classList.contains("dcmod-deleted")) return;
-    content.classList.add("dcmod-deleted");
+    let row = content ? content.closest("li") : null;
+    if (!row) {
+      try {
+        // Discord message rows carry the message id in their element id
+        // (e.g. chat-messages-<channelId>-<id> / chat-messages___<id>).
+        row = document.querySelector('li[id*="' + id + '"]');
+      } catch (e) {}
+    }
+    return { content, row };
+  }
+
+  function applyOne(id) {
+    const { content, row } = elsFor(id);
+    if (content) content.classList.add("dcmod-deleted");
+    if (row && !row.classList.contains("dcmod-deleted-row")) {
+      row.classList.add("dcmod-deleted-row");
+      try {
+        row.dataset.dcmodId = id;
+      } catch (e) {}
+    }
   }
 
   function applyAll() {
@@ -428,23 +453,80 @@
   // Truly remove a preserved message from our client: replay its real
   // MESSAGE_DELETE through the dispatcher (allowDelete lets it pass the wrap).
   function removeLocal(id) {
+    id = String(id);
     deletedIds.delete(id);
     allowDelete.add(id);
-    const el = document.getElementById("message-content-" + id);
-    if (el) el.classList.remove("dcmod-deleted");
-    const action = deletedActions.get(id);
+    const { content, row } = elsFor(id);
+    if (content) content.classList.remove("dcmod-deleted");
+    if (row) {
+      row.classList.remove("dcmod-deleted-row");
+      delete row.dataset.dcmodId;
+    }
+    const action = deletedActions.get(id) || { type: "MESSAGE_DELETE", id: id, channelId: _channelOf(row) };
     deletedActions.delete(id);
     stopObserverIfIdle();
+    log("removeLocal id=" + id + " hasAction=" + !!action + " hasDispatcher=" + !!_dispatcher + " chan=" + action.channelId);
+    let removed = false;
     try {
-      if (_dispatcher && action) _dispatcher.dispatch(action);
-      else if (el) {
-        // No stored action / dispatcher — just hide the row.
-        const row = el.closest("li") || el.parentElement;
-        if (row) row.style.display = "none";
+      if (_dispatcher && action && action.channelId) {
+        _dispatcher.dispatch(action); // allowDelete lets it pass → store drops it
+        removed = true;
       }
     } catch (e) {
-      warn("removeLocal failed", String(e));
+      warn("removeLocal dispatch failed", String(e));
     }
+    // Fallback: if we couldn't dispatch a real delete, hide the row in the DOM.
+    if (!removed && row) row.style.display = "none";
+  }
+
+  // Best-effort channel id from a message row's id (chat-messages-<chan>-<id>).
+  function _channelOf(row) {
+    try {
+      const m = row && row.id && row.id.match(/(\d{17,20})/g);
+      // Row id often contains [channelId, messageId]; the first long number is the channel.
+      if (m && m.length >= 2) return m[0];
+    } catch (e) {}
+    return undefined;
+  }
+
+  function findByPropsAll(...props) {
+    for (const r of allRequires()) {
+      const m = findByProps(r, ...props);
+      if (m) return m;
+    }
+    return null;
+  }
+
+  // Hook the action that deletes a message so that deletes WE initiate (our own
+  // messages, or moderating others) actually go through and vanish, while deletes
+  // by OTHERS (gateway-only, no local deleteMessage call) stay preserved red.
+  function hookOutgoingDeletes() {
+    let MA = null;
+    try {
+      const t = performance.now();
+      MA = findByPropsAll("deleteMessage", "editMessage") || findByPropsAll("deleteMessage", "sendMessage") || findByPropsAll("deleteMessage");
+      log("hookOutgoingDeletes scan done in " + (performance.now() - t).toFixed(0) + "ms found=" + !!MA);
+    } catch (e) {
+      warn("hookOutgoingDeletes scan threw", String(e));
+    }
+    if (MA && typeof MA.deleteMessage === "function") {
+      if (MA.__dcmodDelHook) {
+        log("deleteMessage already hooked");
+        return true;
+      }
+      MA.__dcmodDelHook = true;
+      const orig = MA.deleteMessage;
+      MA.deleteMessage = function (channelId, messageId) {
+        try {
+          if (messageId != null) allowDelete.add(String(messageId));
+        } catch (e) {}
+        return orig.apply(this, arguments);
+      };
+      log("hooked deleteMessage — your deletes vanish, others' stay red");
+      return true;
+    }
+    log("deleteMessage NOT found (minified?) — your deletes will still be preserved; use shift+right-click");
+    return false;
   }
 
   // ids the user chose to actually remove locally (let the delete through).
@@ -563,10 +645,16 @@
       "contextmenu",
       (e) => {
         try {
-          if (!e.shiftKey) return; // only shift+right-click is ours
-          const node = e.target && e.target.closest ? e.target.closest('[id^="message-content-"]') : null;
-          if (!node || !node.classList.contains("dcmod-deleted")) return;
-          const id = node.id.slice("message-content-".length);
+          if (!e.shiftKey || !e.target || !e.target.closest) return; // only shift+right-click
+          // Prefer the tagged row (works for gif/embed-only messages too).
+          let id = null;
+          const holder = e.target.closest("[data-dcmod-id]");
+          if (holder) id = holder.dataset.dcmodId;
+          if (!id) {
+            const node = e.target.closest('[id^="message-content-"]');
+            if (node && node.classList.contains("dcmod-deleted")) id = node.id.slice("message-content-".length);
+          }
+          if (!id) return;
           e.preventDefault();
           e.stopPropagation();
           removeLocal(id);
@@ -574,6 +662,255 @@
       },
       true // capture: beat Discord's own handler
     );
+  }
+
+  // ===========================================================================
+  // Text transforms (ported from the selfbot's visuals/owoify). Pure string→string.
+  // Applied PRE-SEND by rewriting the message box, so the sent message is already
+  // styled — zero flash, no edits, no (edited) tag. (See SELFBOT_AND_CLIENT.md.)
+  // ===========================================================================
+  const _map = (s, from, to) => {
+    let out = "";
+    for (const ch of s) {
+      const i = from.indexOf(ch);
+      out += i === -1 ? ch : to[i];
+    }
+    return out;
+  };
+  const _LOWER = "abcdefghijklmnopqrstuvwxyz";
+  const _UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const _DIGITS = "0123456789";
+
+  function _fromCodepoints(base) {
+    // base = array of starting codepoints for [a..z]; build 26-char string.
+    return Array.from({ length: 26 }, (_, i) => String.fromCodePoint(base + i)).join("");
+  }
+
+  const transforms = {
+    vaporwave(t) {
+      let out = "";
+      for (const ch of t) {
+        const c = ch.codePointAt(0);
+        if (c >= 0x21 && c <= 0x7e) out += String.fromCodePoint(c + 0xfee0);
+        else if (ch === " ") out += "　";
+        else out += ch;
+      }
+      return out;
+    },
+    smallcaps(t) {
+      const sc = "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘQʀsᴛᴜᴠᴡxʏᴢ";
+      return _map(t.toLowerCase(), _LOWER, sc);
+    },
+    doublestruck(t) {
+      // 𝕒.. (U+1D552) lowercase, 𝔸.. (U+1D538) uppercase, 𝟘.. (U+1D7D8) digits
+      const lo = _fromCodepoints(0x1d552);
+      const up = _fromCodepoints(0x1d538);
+      const dg = Array.from({ length: 10 }, (_, i) => String.fromCodePoint(0x1d7d8 + i)).join("");
+      return _map(_map(_map(t, _LOWER, lo), _UPPER, up), _DIGITS, dg);
+    },
+    script(t) {
+      // 𝓪.. (U+1D4EA) bold script lowercase, 𝓐.. (U+1D4D0) uppercase
+      const lo = _fromCodepoints(0x1d4ea);
+      const up = _fromCodepoints(0x1d4d0);
+      return _map(_map(t, _LOWER, lo), _UPPER, up);
+    },
+    bold(t) {
+      const lo = _fromCodepoints(0x1d41a);
+      const up = _fromCodepoints(0x1d400);
+      const dg = Array.from({ length: 10 }, (_, i) => String.fromCodePoint(0x1d7ce + i)).join("");
+      return _map(_map(_map(t, _LOWER, lo), _UPPER, up), _DIGITS, dg);
+    },
+    bigtext(t) {
+      let out = [];
+      for (const ch of t.toLowerCase()) {
+        if (ch >= "a" && ch <= "z") out.push(String.fromCodePoint(0x1f1e6 + (ch.charCodeAt(0) - 97)) + " ");
+        else if (ch === " ") out.push("  ");
+        else out.push(ch);
+      }
+      return out.join("");
+    },
+    spoilerify(t) {
+      return Array.from(t).map((c) => (c === " " ? " " : "||" + c + "||")).join("");
+    },
+    zalgo(t) {
+      const marks = [];
+      for (let c = 0x0300; c <= 0x036f; c++) marks.push(String.fromCharCode(c));
+      let out = "";
+      for (const ch of t) {
+        out += ch;
+        if (ch !== " ") for (let i = 0; i < 5; i++) out += marks[Math.floor(Math.random() * marks.length)];
+      }
+      return out;
+    },
+    owoify(t) {
+      const faces = [" (・`ω´・)", " owo", " UwU", " >w<", " ^w^", " :3"];
+      let s = t
+        .replace(/(?:r|l)/g, "w")
+        .replace(/(?:R|L)/g, "W")
+        .replace(/n([aeiou])/g, "ny$1")
+        .replace(/N([aeiou])/g, "Ny$1")
+        .replace(/ove/g, "uv");
+      s = s.replace(/([.!?])\s*/g, (m, p) => p + faces[Math.floor(Math.random() * faces.length)] + " ");
+      return s.trim();
+    },
+  };
+
+  // ===========================================================================
+  // Message box (Slate editor) pre-send rewrite
+  // ===========================================================================
+  function getMessageBox() {
+    return document.querySelector('[data-slate-editor="true"]') || document.querySelector('div[role="textbox"]');
+  }
+
+  // Replace the current message-box text with transform(currentText). Uses
+  // execCommand("insertText") so Slate processes it as real user input.
+  function applyTransformToInput(fn) {
+    const box = getMessageBox();
+    if (!box) {
+      log("transform: message box not found (focus a channel)");
+      return false;
+    }
+    box.focus();
+    const text = box.textContent || "";
+    try {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(box);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand("insertText", false, fn(text));
+      return true;
+    } catch (e) {
+      warn("transform failed", String(e));
+      return false;
+    }
+  }
+
+  // ===========================================================================
+  // Custom UI — minimal, modern, edgy. Black/white. Floating launcher + panel.
+  // ===========================================================================
+  function injectUIStyle() {
+    if (document.getElementById("dcmod-ui-style")) return;
+    const s = document.createElement("style");
+    s.id = "dcmod-ui-style";
+    s.textContent = `
+      #dcmod-launcher {
+        position: fixed; right: 18px; bottom: 18px; z-index: 99999;
+        width: 38px; height: 38px; border-radius: 9px;
+        background: #000; color: #fff; border: 1px solid #2a2a2a;
+        font: 700 13px/38px ui-monospace,Menlo,Consolas,monospace; text-align: center;
+        cursor: pointer; user-select: none; letter-spacing: .5px;
+        box-shadow: 0 4px 18px rgba(0,0,0,.5); transition: transform .12s, border-color .12s;
+      }
+      #dcmod-launcher:hover { transform: translateY(-2px); border-color: #fff; }
+      #dcmod-panel {
+        position: fixed; right: 18px; bottom: 66px; z-index: 99999;
+        width: 286px; max-height: 70vh; overflow-y: auto;
+        background: #0a0a0a; color: #fff; border: 1px solid #2a2a2a; border-radius: 12px;
+        padding: 14px; display: none; font-family: ui-monospace,Menlo,Consolas,monospace;
+        box-shadow: 0 10px 40px rgba(0,0,0,.6);
+      }
+      #dcmod-panel.open { display: block; }
+      .dcmod-h {
+        font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
+        color: #666; margin: 14px 0 8px; border-bottom: 1px solid #1c1c1c; padding-bottom: 5px;
+      }
+      .dcmod-h:first-child { margin-top: 0; }
+      .dcmod-title { font-size: 13px; font-weight: 700; letter-spacing: 3px; margin-bottom: 2px; }
+      .dcmod-sub { font-size: 9px; color: #555; letter-spacing: 1px; margin-bottom: 6px; }
+      .dcmod-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+      .dcmod-btn {
+        background: transparent; color: #ddd; border: 1px solid #333; border-radius: 7px;
+        padding: 7px 6px; font: 600 11px ui-monospace,Menlo,Consolas,monospace; cursor: pointer;
+        transition: all .1s; text-align: center;
+      }
+      .dcmod-btn:hover { background: #fff; color: #000; border-color: #fff; }
+      .dcmod-btn.wide { grid-column: 1 / -1; }
+      .dcmod-btn.on { background: #fff; color: #000; }
+      .dcmod-note { font-size: 9px; color: #444; margin-top: 10px; line-height: 1.4; }
+    `;
+    document.head.appendChild(s);
+  }
+
+  function installUI() {
+    if (document.getElementById("dcmod-launcher")) return;
+    injectUIStyle();
+
+    const launcher = document.createElement("div");
+    launcher.id = "dcmod-launcher";
+    launcher.textContent = "DC";
+    launcher.title = "DiscordMod";
+
+    const panel = document.createElement("div");
+    panel.id = "dcmod-panel";
+
+    const mkBtn = (label, onClick, opts) => {
+      const b = document.createElement("div");
+      b.className = "dcmod-btn" + (opts && opts.wide ? " wide" : "");
+      b.textContent = label;
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    const mkHeader = (t) => {
+      const h = document.createElement("div");
+      h.className = "dcmod-h";
+      h.textContent = t;
+      return h;
+    };
+    const mkGrid = (btns) => {
+      const g = document.createElement("div");
+      g.className = "dcmod-grid";
+      btns.forEach((b) => g.appendChild(b));
+      return g;
+    };
+
+    // Title
+    const title = document.createElement("div");
+    title.className = "dcmod-title";
+    title.textContent = "DISCORDMOD";
+    panel.appendChild(title);
+    const sub = document.createElement("div");
+    sub.className = "dcmod-sub";
+    sub.textContent = "client mod · pre-send";
+    panel.appendChild(sub);
+
+    // Text transforms — rewrite the message box, then you hit Enter.
+    panel.appendChild(mkHeader("text · transforms current input"));
+    const tnames = [
+      ["vaporwave", "vaporwave"],
+      ["sᴍᴀʟʟᴄᴀᴘs", "smallcaps"],
+      ["𝕕𝕤𝕥𝕣𝕦𝕔𝕜", "doublestruck"],
+      ["𝓼𝓬𝓻𝓲𝓹𝓽", "script"],
+      ["𝐛𝐨𝐥𝐝", "bold"],
+      ["🇧🇮🇬", "bigtext"],
+      ["s‖p‖oiler", "spoilerify"],
+      ["z̸a̸l̸g̸o̸", "zalgo"],
+      ["owoify", "owoify"],
+    ];
+    panel.appendChild(
+      mkGrid(tnames.map(([label, key]) => mkBtn(label, () => applyTransformToInput(transforms[key]))))
+    );
+
+    // Deleted-message viewer
+    panel.appendChild(mkHeader("deleted viewer"));
+    const toggleBtn = mkBtn(enabled ? "viewer: ON" : "viewer: OFF", () => {
+      const now = window.DCMod.toggleDeleted();
+      toggleBtn.textContent = now ? "viewer: ON" : "viewer: OFF";
+      toggleBtn.classList.toggle("on", now);
+    });
+    toggleBtn.classList.toggle("on", enabled);
+    const clearBtn = mkBtn("clear all", () => window.DCMod.clearDeleted());
+    panel.appendChild(mkGrid([toggleBtn, clearBtn]));
+
+    const note = document.createElement("div");
+    note.className = "dcmod-note";
+    note.textContent = "transforms rewrite your draft — press Enter to send. shift+right-click a red (deleted) message to remove it.";
+    panel.appendChild(note);
+
+    launcher.addEventListener("click", () => panel.classList.toggle("open"));
+    document.body.appendChild(launcher);
+    document.body.appendChild(panel);
+    log("UI installed");
   }
 
   // ---------------------------------------------------------------------------
@@ -591,6 +928,8 @@
       log("cleared tracked deletions");
     },
     removeLocal: (id) => removeLocal(id),
+    transforms,
+    transform: (name) => applyTransformToInput(transforms[name]),
     diag: () => diag(),
     perf() {
       const s = perfSnapshot();
@@ -716,6 +1055,8 @@
 
     installObserver();
     installContextMenu();
+    hookOutgoingDeletes();
+    installUI();
     restoreM(); // dispatcher captured — stop taxing every Function .m read
     log("ready ✓  (toggle with DCMod.toggleDeleted())");
     diag(); // auto-dump state so the log file is self-sufficient
