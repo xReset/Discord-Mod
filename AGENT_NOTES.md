@@ -1,0 +1,166 @@
+# AGENT_NOTES — read FIRST, update LAST (every session)
+
+> **Mandate for any AI agent working in `E:\DiscordMod`:**
+> 1. **Read this file before doing anything else.** It exists so you don't re-burn tokens
+>    rediscovering Discord-client quirks we already paid for.
+> 2. **Update it before you finish.** Any new niche, quirk, dead-end, or hard-won fact about
+>    the Discord client / Electron / webpack internals → write it here. Add failed approaches
+>    too (a documented dead-end saves the next agent a full restart cycle).
+> 3. Keep entries terse and factual. Quote exact error strings. Note the Discord build
+>    (`app-<version>`) a fact was observed on — internals change between builds.
+> 4. This is the **scratch/quirks log**. `DiscordMod.md` = overview, `PROGRESS.md` = build status.
+>    Put durable internals knowledge here.
+
+**Current Discord build observed:** `app-1.0.9239` (Stable, Win11).
+
+---
+
+## Hard rules (break these = logout / wasted hours)
+
+- **NEVER spam `webpackChunkdiscord_app.push()`** during login/auth phase → logs the account out
+  (corrupts auth handshake). Push only after `chunk.length >= 5`, cap pushes.
+- **`Stop-Process -Force` mid-session can log you out** (kills during session-DB write). Observed ×3
+  historically. Current loop: plain `Stop-Process -Name Discord` (no `-Force`) + 3s wait, then relaunch
+  via `& "$env:LOCALAPPDATA\Discord\Update.exe" --processStart Discord.exe`. So far no logout this run.
+- **DevTools:** Discord Stable forces `webPreferences.devTools=false` and wipes the `settings.json`
+  flag on exit. We force `devTools=true` in the shim's `PatchedBrowserWindow` ctor. Don't bother with
+  settings.json.
+- **CSP blocks inline `<script>`** (`Refused to execute inline script…`). Inject via
+  `webFrame.executeJavaScript` from the preload (runs in main world, bypasses CSP).
+
+## Iteration workflow (what actually works)
+
+- **Edit `src/renderer/renderer.js` → restart Discord.** Preload reads renderer fresh each launch.
+  **No `node install.js` needed** unless you change the SHIM itself (`install.js` / index.js / preload.js
+  / the log filter).
+- **Hot-reload (fs.watch → `webContents.executeJavaScript`) does NOT work for iteration.** The reinject
+  runs in a context whose `console-message` is NOT captured to the log file, so you get zero feedback.
+  Treat hot-reload as dead; **full restart is the only reliable loop.**
+- **Logs:** `logs/discord-console.log`, fresh each launch. Filter keeps `[DCMod]` lines + real errors,
+  and DROPS noise (`preloaded using link preload`, `PostMessageTransport`). Before the filter fix the
+  file hit 8MB of woff2 warnings — unreadable. Don't loosen the filter back to all-warnings.
+- To watch a boot from an agent: background-grep the log for
+  `dispatcher hook installed|brute scan found no|ready ✓` then dump `grep DCMod | tail`.
+
+## Webpack / module internals (build 1.0.9239)
+
+- `window.webpackChunkdiscord_app` is the only webpack global. Grab `wreq` via
+  `chunk.push([[Symbol()], {}, r => req = r])`.
+- `wreq.c` = executed-module cache (~102 right after login). `wreq.m` = all registered factories (~3115).
+  **Most modules are lazy** — registered in `wreq.m` but not executed, so they're absent from `wreq.c`.
+- **Pushing more synthetic chunks does NOT grow `wreq.c`.** To populate the cache you must `wreq(id)`
+  each factory. Brute-executing all of `wreq.m` (try/catch each) is safe POST-LOGIN and is a one-time cost.
+- **`addInterceptor` is GONE** (removed Discord 2024+). The old "return true to block MESSAGE_DELETE"
+  approach is dead. Block deletes by **wrapping `Dispatcher.dispatch`** and swallowing the action instead.
+- **Discord module exports use throwing getters.** When scanning `Object.keys(exports)` and reading
+  `exports[k]`, wrap EACH key access in its own try/catch — a single throwing getter must not abort the
+  scan of that module's other properties. (This bug silently hid every candidate for multiple restarts.)
+- Dispatcher instance shape to match: `typeof o.dispatch === "function"` AND one of
+  `subscribe` / `wait` / `_actionHandlers` / `_subscriptions` / `_waitQueue`. Method/field names ARE
+  minified, but action-type STRING LITERALS (`"MESSAGE_DELETE"`, `"MESSAGE_CREATE"`) survive minification.
+
+## Build 1.0.9239 — dispatcher hunt findings (2026-05-30, costly, READ THIS)
+
+Burned ~8 restart cycles confirming the following. Don't repeat:
+
+- **All method/property names are obfuscated** to 2-char garbage. Probing executed-module
+  exports (depth 0-1) for `dispatch`/`subscribe`/`wait`/`register`/`addChangeListener`/
+  `_dispatchToken`/`flushWaitQueue`/`addInterceptor` → **count=0 for every one**. Only `getName`
+  matched (count=1). So `findByProps("dispatch","subscribe")` style discovery is DEAD here.
+- **No action-handler MAP object exists.** Scanned all exports depth 0-2 for a plain object keyed
+  by action-type strings (`"MESSAGE_DELETE"`+≥6 ALLCAPS keys) → **0 hits**. Modern stores appear to
+  use switch/reducer functions, not `{MESSAGE_DELETE: fn}` maps. (Could also be `Map`-based; either
+  way not reachable as plain-object keys.)
+- **Action-type STRING LITERALS survive in factory SOURCE** (`wreq.m[id].toString()` contains
+  `"MESSAGE_DELETE"`), but the modules that contain them are action-creators/components
+  (functions with empty prototypes), not the store/dispatcher.
+- **Brute-force executing every `wreq.m` factory is harmful for discovery:** ~590 of ~3100 THROW
+  when required out of dependency order. The FluxDispatcher module likely throws → never lands in
+  `wreq.c` → never scanned. So "execute everything then scan cache" CANNOT find it.
+- **Chunks load lazily by route:** at `@me` only ~1645 factories registered; opening a real text
+  channel grows `wreq.m` to ~3115-3417. Message/dispatcher chunks only exist after navigating into
+  a channel. Any discovery must re-run as `wreq.m` grows (we gate brute on module-count growth).
+- **Correct approach (per research):** do NOT force-execute. Instead wrap the webpack chunk `push`
+  / module factories to observe each module's exports as Discord executes them IN ORDER, and match
+  the dispatcher by `findByCode`-style source-string matching, not by live property names. See the
+  research report + Vencord/moonlight `webpack` patcher. (Implementing this next.)
+
+## Webpack/Flux technique — from researching Vencord/moonlight (2026-05-30, AUTHORITATIVE)
+
+The earlier "names are all obfuscated" conclusion was WRONG about the cause. Truth:
+
+- **`dispatch` and `subscribe` ARE live runtime property keys on the FluxDispatcher INSTANCE.**
+  They're the public flux API and survive minification. Vencord finds it with literally
+  `findByProps("dispatch","subscribe")` / `waitFor(["dispatch","subscribe"])`. Internals
+  `_actionHandlers`/`_subscriptions`/`_interceptors`/`addInterceptor`/`isDispatching` also survive
+  (underscore-prefixed). **`addInterceptor` is NOT gone** — moonlight still maps it.
+- **Why our scan saw count=0:** we were FORCE-EXECUTING every `wreq.m` factory (`wreq(id)`), which
+  throws on out-of-order deps (~590 throws) and corrupts/partial-fills the dispatcher's cache entry.
+  **NEVER force-execute factories for discovery.** Scan only naturally-executed `wreq.c` exports,
+  checking the export object AND each enumerable member (`for..in`). The dispatcher is core and is
+  loaded naturally within seconds — no navigation/brute needed.
+- `findByProps` matches **live `exports` object property keys**, NOT minified factory source text.
+  Source-string search (`wreq.m[id].toString()`) is a *different* tool (`findByCode`) for finding a
+  module by a stable literal it contains.
+- **Minify-stable locator strings** (use with source search if prop-scan ever fails):
+  - FluxDispatcher module: `"Dispatch.dispatch(...) called without an action type"`
+  - Dispatcher class export: `"_dispatchWithDevtools("`
+  - MessageStore module: `'"MessageStore"'` ; ReferencedMessageStore: `'"ReferencedMessageStore"'`
+- **Grabbing `wreq` properly (if push-capture is unreliable):** modern mods hook the
+  **`Function.prototype.m` setter** (fires when each Rspack entrypoint assigns its module table),
+  guarding the main instance via `String(require).includes("exports:{}")` (Vencord) or call-stack
+  `includes("/assets/web.")` (moonlight). Discord is **Rspack** now; `.push` is reassigned per
+  entrypoint and chained via `.bind` — if you wrap push, intercept via getter/setter and pass `.bind`
+  through or you deadlock. (Our simple one-time `push([[Symbol()],{} ,r=>req=r])` is fine for grabbing
+  `wreq` to read `wreq.c`; we just must not force-execute.)
+- **Keeping deleted messages (Vencord MessageLogger):** they patch the **MessageStore factory's
+  `MESSAGE_DELETE:function(e){…}` handler** (regex on factory source, replacing remove→`deleted:true`
+  annotation + `commit` + `return`). That needs factory-source patching (Function.prototype.m hook).
+  Our lighter approach: find dispatcher, **wrap `dispatch`** and swallow MESSAGE_DELETE (message never
+  leaves store), style red via CSS/DOM. Equivalent for a personal viewer.
+
+## ✅ SOLVED — dispatcher discovery that works on 1.0.9239 (2026-05-30)
+
+**Root cause of every prior failure:** the chunk-push require (`push([[Symbol()],{},r=>req=r])`)
+returns a require whose `.c` only had ~102 modules — it MISSES the entrypoint's pre-populated
+modules where the FluxDispatcher lives. Forcing execution to compensate corrupted things.
+
+**The fix (works, in renderer.js now):** install a `Function.prototype.m` setter capture
+SYNCHRONOUSLY at inject time (before webpack boots). Every Rspack require assigns `.m` once at
+boot → the setter records each require into a Set, then restores `.m` as a normal own data property.
+Then scan EVERY captured require's `.c` for the live object with `dispatch`+`subscribe`
+(`isFlux`). Result: captured require has **~6000-7700 modules**, dispatcher found in <1s, keys =
+`dispatch,subscribe,addInterceptor`. `addInterceptor` confirmed present.
+
+Critical: the renderer is injected via preload `webFrame.executeJavaScript` which runs BEFORE page
+scripts, so the `Function.prototype.m` hook is early enough. If you ever move injection later, this
+breaks. Do NOT remove the capture block at the top of renderer.js.
+
+## Open / in-progress
+
+- Finding the FluxDispatcher reliably on 1.0.9239 — see `PROGRESS.md` for live status. Latest theory:
+  per-key try/catch in the export scan was masking it. (Update this line with the outcome.)
+
+## Gotcha: many objects expose dispatch+subscribe — most are FACADES
+
+`findByProps("dispatch","subscribe")` returns the FIRST match, often a facade with ONLY
+`{dispatch,subscribe,addInterceptor}` (3 keys). Discord does NOT dispatch through the facade —
+wrapping its `.dispatch` is silently dead (we saw ZERO actions flow through it). The REAL
+FluxDispatcher instance has internal `_`-fields:
+`_defaultBand,_interceptors,_subscriptions,_waitQueue,_processingWaitQueue,_currentDispatchActionType,_actionHandlers,_sentryUtils,actionLogger,functionCache`.
+**Score candidates and pick the one with the most `_`-fields / `isDispatching`.** ~28 flux
+candidates exist on a loaded client.
+
+Real action shapes (build 1.0.9239):
+- `MESSAGE_DELETE` = `{type,id,channelId}` (gateway) or `{type,guildId,id,channelId}`.
+- `MESSAGE_DELETE_BULK` = `{type,...,ids}`.
+- `addInterceptor(cb)`: return `true` to DROP the action (keeps message). Confirmed working.
+
+## Changelog (append one line per session)
+
+- 2026-05-30: Created this file. Rewrote dispatcher discovery (deep export scan + brute-execute all
+  factories), swapped addInterceptor→dispatch-wrap, added hover-✕ local removal, fixed log-noise filter,
+  fixed per-key getter try/catch. Restart-loop iteration confirmed; hot-reload confirmed dead.
+- 2026-05-30: SOLVED. Function.prototype.m capture → real require (~7700 modules). Score-pick real
+  dispatcher (not facade) by `_`-fields. addInterceptor block. Deleted messages persist. ✅ committed.
+  Next: performance benchmarking + optimization (modded client feels slower than vanilla).

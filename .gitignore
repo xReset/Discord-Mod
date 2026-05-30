@@ -1,0 +1,7 @@
+.claude/
+node_modules/
+logs/
+.shim-build/
+.dcmod_new.js
+*.log
+.DS_Store

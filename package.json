@@ -1,0 +1,13 @@
+{
+  "name": "discordmod",
+  "version": "0.1.0",
+  "description": "Custom Discord client mod (injector + renderer plugins). First feature: deleted-message viewer.",
+  "private": true,
+  "scripts": {
+    "install-mod": "node install.js",
+    "uninstall-mod": "node uninstall.js"
+  },
+  "devDependencies": {
+    "@electron/asar": "^3.2.10"
+  }
+}
