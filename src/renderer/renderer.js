@@ -110,6 +110,8 @@
   // interceptor; obs* = our mutation-observer apply pass.
   // ---------------------------------------------------------------------------
   const _perf = { intMs: 0, intN: 0, obsMs: 0, obsN: 0, ltN: 0, ltMs: 0, since: 0 };
+  let _perfInterval = 0; // handle for the long-session perf sampler
+  const _PERF_INTERVAL_MS = 5 * 60 * 1000; // sample every 5min
   try {
     _perf.since = performance.now();
     new PerformanceObserver((l) => {
@@ -489,21 +491,24 @@
   // Locate the text node AND the message row for a message id. Gif/embed-only
   // messages may have no message-content text node, so we also find the row by id.
   const _rowCache = new Map(); // id -> last-resolved <li> (validated by isConnected)
-  function elsFor(id) {
+  // full=true permits the costly full-DOM suffix scan (one-shot at mark/remove
+  // time). The per-frame applyAll path passes full=false so it NEVER scans the
+  // whole DOM — discovery of off-screen rows scrolling back in is handled by the
+  // observer's addedNodes (see scheduleApply). This is what keeps long sessions
+  // cheap: per-frame cost is O(tracked) indexed getElementById, not O(tracked)
+  // full-DOM attribute scans.
+  function elsFor(id, full) {
     const content = document.getElementById("message-content-" + id);
     let row = content ? content.closest("li") : null;
     if (!row) {
-      // Reuse the last-resolved row if it's still in the DOM — avoids the costly
-      // full-DOM substring-attribute scan on every frame for embed/gif-only rows.
       const cached = _rowCache.get(id);
       if (cached && cached.isConnected) {
         row = cached;
-      } else {
+      } else if (full) {
         try {
           // Discord message rows carry the message id in their element id
           // (e.g. chat-messages-<channelId>-<id> / chat-messages___<id>).
-          // Row ids end with the message id (chat-messages-<chan>-<id> /
-          // chat-messages___<id>); anchored suffix match beats a substring scan.
+          // Row ids end with the message id; anchored suffix match.
           row = document.querySelector('li[id$="' + id + '"]');
         } catch (e) {}
       }
@@ -512,8 +517,8 @@
     return { content, row };
   }
 
-  function applyOne(id) {
-    const { content, row } = elsFor(id);
+  function applyOne(id, full) {
+    const { content, row } = elsFor(id, full);
     if (content) content.classList.add("dcmod-deleted");
     if (row && !row.classList.contains("dcmod-deleted-row")) {
       row.classList.add("dcmod-deleted-row");
@@ -525,7 +530,9 @@
 
   function applyAll() {
     if (!enabled) return;
-    deletedIds.forEach(applyOne);
+    // Cheap pass: full=false → no full-DOM scans. Off-screen rows resolve via
+    // scheduleApply's addedNodes inspection when they scroll back in.
+    deletedIds.forEach((id) => applyOne(id, false));
   }
 
   // Cap preserved deletions so memory/DOM stay bounded over long sessions across
@@ -538,8 +545,9 @@
     if (action) deletedActions.set(id, action);
     ensureObserver(); // start maintaining styling now that we have a deletion
     // Apply now and again after Discord finishes its own render pass.
-    applyOne(id);
-    requestAnimationFrame(() => applyOne(id));
+    // full=true: one-shot scan resolves embed/gif-only rows present at delete time.
+    applyOne(id, true);
+    requestAnimationFrame(() => applyOne(id, true));
     // Evict oldest beyond the cap (actually removes it → frees store + DOM).
     while (deletedIds.size > RETENTION_CAP) {
       const oldest = deletedIds.values().next().value;
@@ -555,7 +563,7 @@
     deletedIds.delete(id);
     _rowCache.delete(id);
     allowDelete.add(id);
-    const { content, row } = elsFor(id);
+    const { content, row } = elsFor(id, true);
     if (content) content.classList.remove("dcmod-deleted");
     if (row) {
       row.classList.remove("dcmod-deleted-row");
@@ -668,11 +676,16 @@
             log("action type=" + type + " keys=[" + Object.keys(action).slice(0, 12).join(",") + "]");
           }
           if (enabled) {
-            if (type === "MESSAGE_DELETE" && !allowDelete.has(action.id)) {
-              markDeleted(action.id, action);
-              result = true; // block removal
+            if (type === "MESSAGE_DELETE") {
+              if (allowDelete.has(action.id)) {
+                allowDelete.delete(action.id); // consume — id is single-use, bounds the Set
+              } else {
+                markDeleted(action.id, action);
+                result = true; // block removal
+              }
             } else if (type === "MESSAGE_DELETE_BULK" && Array.isArray(action.ids)) {
               const block = action.ids.filter((x) => !allowDelete.has(x));
+              action.ids.forEach((x) => allowDelete.delete(x)); // consume any allowed ids
               block.forEach((x) => markDeleted(x, { type: "MESSAGE_DELETE", id: x, channelId: action.channelId, guildId: action.guildId }));
               if (block.length === action.ids.length) result = true; // block all
             }
@@ -716,7 +729,40 @@
   let _obs = null;
   let _rafScheduled = false;
 
-  function scheduleApply() {
+  // Trailing 17-20 digit message id from a row element id
+  // (chat-messages-<chan>-<id> / chat-messages___<id>).
+  function _idOfRow(li) {
+    const m = li && li.id && li.id.match(/(\d{17,20})$/);
+    return m ? m[1] : null;
+  }
+
+  // Style a freshly-inserted row if its id is a tracked deletion. Lets off-screen
+  // embed/gif rows (no content node) restyle on scroll-in WITHOUT a per-frame
+  // full-DOM scan — we only look at the nodes Discord actually added.
+  function _tryRow(li) {
+    const id = _idOfRow(li);
+    if (id && deletedIds.has(id)) {
+      _rowCache.set(id, li);
+      applyOne(id, false);
+    }
+  }
+
+  function scheduleApply(mutations) {
+    // Insertion-driven discovery: inspect only the added nodes, not the whole DOM.
+    if (mutations) {
+      for (let i = 0; i < mutations.length; i++) {
+        const added = mutations[i].addedNodes;
+        for (let j = 0; j < added.length; j++) {
+          const node = added[j];
+          if (node.nodeType !== 1) continue;
+          if (node.matches && node.matches("li[id]")) _tryRow(node);
+          if (node.querySelectorAll) {
+            const lis = node.querySelectorAll("li[id]");
+            for (let k = 0; k < lis.length; k++) _tryRow(lis[k]);
+          }
+        }
+      }
+    }
     if (_rafScheduled) return;
     _rafScheduled = true;
     requestAnimationFrame(() => {
@@ -1164,7 +1210,17 @@
     diag(); // auto-dump state so the log file is self-sufficient
     // Passive baseline: measure our idle overhead for 30s, dump once.
     perfReset();
-    setTimeout(() => log("perf baseline " + JSON.stringify(perfSnapshot()) + " noTrack=" + _noTrack + " telBlocked=" + _telBlocked), 30000);
+    setTimeout(() => {
+      log("perf baseline " + JSON.stringify(perfSnapshot()) + " noTrack=" + _noTrack + " telBlocked=" + _telBlocked);
+      // Long-session sampling: per-interval delta every 5min so main-thread
+      // drift is visible across a multi-hour session. Reset each tick.
+      perfReset();
+      if (_perfInterval) clearInterval(_perfInterval);
+      _perfInterval = setInterval(() => {
+        log("perf interval " + JSON.stringify(perfSnapshot()) + " noTrack=" + _noTrack + " telBlocked=" + _telBlocked);
+        perfReset();
+      }, _PERF_INTERVAL_MS);
+    }, 30000);
   }
 
   // Manual diagnostic — run DCMod.diag() in the console.
