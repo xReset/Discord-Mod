@@ -405,6 +405,10 @@
     deletedIds.forEach(applyOne);
   }
 
+  // Cap preserved deletions so memory/DOM stay bounded over long sessions across
+  // many servers. Set is insertion-ordered, so the first entry is the oldest.
+  const RETENTION_CAP = 500;
+
   function markDeleted(id, action) {
     if (!id) return;
     deletedIds.add(id);
@@ -413,6 +417,12 @@
     // Apply now and again after Discord finishes its own render pass.
     applyOne(id);
     requestAnimationFrame(() => applyOne(id));
+    // Evict oldest beyond the cap (actually removes it → frees store + DOM).
+    while (deletedIds.size > RETENTION_CAP) {
+      const oldest = deletedIds.values().next().value;
+      if (oldest === undefined) break;
+      removeLocal(oldest);
+    }
   }
 
   // Truly remove a preserved message from our client: replay its real
@@ -544,16 +554,18 @@
     ensureObserver(); // no-op until first deletion
   }
 
-  // Right-click a preserved (red) deleted message → remove it from our local view
-  // for good (replays the real delete via removeLocal). We only swallow the native
-  // context menu for messages WE'RE preserving; all other right-clicks pass through.
+  // SHIFT + right-click a preserved (red) deleted message → remove it from our
+  // local view for good (replays the real delete via removeLocal). Plain
+  // right-click (and any click on a non-preserved message) passes through to
+  // Discord untouched.
   function installContextMenu() {
     document.addEventListener(
       "contextmenu",
       (e) => {
         try {
+          if (!e.shiftKey) return; // only shift+right-click is ours
           const node = e.target && e.target.closest ? e.target.closest('[id^="message-content-"]') : null;
-          if (!node || !node.classList.contains("dcmod-deleted")) return; // normal Discord menu
+          if (!node || !node.classList.contains("dcmod-deleted")) return;
           const id = node.id.slice("message-content-".length);
           e.preventDefault();
           e.stopPropagation();

@@ -179,9 +179,10 @@ Real action shapes (build 1.0.9239):
   `{subtree:true}` observer that runs on every mutation — that was the tax.
 - **`Function.prototype.m` accessor is REMOVED after boot** (`restoreM()`), so it doesn't tax
   every `.m` read for the whole session. Only needed during capture.
-- **Known scaling risk:** blocking `MESSAGE_DELETE` keeps messages in the store + DOM forever.
-  Over a long session across many servers this is unbounded memory/DOM growth. Future: cap
-  retained deletions per channel, or prune on channel switch. Not yet implemented.
+- **Scaling: retention cap IMPLEMENTED.** `RETENTION_CAP = 500` (renderer.js). `deletedIds` is an
+  insertion-ordered Set; when size exceeds the cap, `markDeleted` evicts the oldest via
+  `removeLocal` (actually deletes it → frees store + DOM). Keeps memory bounded over long sessions
+  across many servers. Tune the constant if needed.
 - **Benchmark tools (in renderer, console):** `DCMod.perf()` snapshot; `DCMod.setActive(bool)`
   A/B toggle; `DCMod.autoBench(secs)` = scripted identical triangle-wave scroll with hooks ON
   then OFF, logs `autoBench RESULT` comparing `ltPerMin`/`blockMsPerMin`. `longtask` = main-thread
