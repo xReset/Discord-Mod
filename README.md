@@ -1,11 +1,14 @@
 # DiscordMod
 
 Custom Discord client mod for Discord **Stable** (Windows). Injector + main-world renderer
-plugins. First feature: **deleted-message viewer** — deleted messages stay visible, painted red
-with a `(deleted)` tag instead of vanishing.
+plugins. First feature: **deleted-message viewer** — messages deleted by *others* stay visible,
+painted **red**, instead of vanishing. Messages *you* delete still vanish normally.
 
 This is fully our own injector (not Vencord/BetterDiscord). It loads the original Discord app
 untouched and adds a chained preload that injects our renderer script.
+
+> **Working on the code?** Read `WORKFLOW.md` first (safe iterate/verify loop + scripts), then
+> `AGENT_NOTES.md` (internals) and `PLAN.md` (next build plan / corrected UX model).
 
 ## How it works
 
@@ -18,9 +21,13 @@ _app.asar        untouched backup of the original Discord app
 src/renderer/renderer.js   the actual features (edit freely, restart Discord to reload)
 ```
 
-The renderer grabs Discord's Flux dispatcher and adds an interceptor: on `MESSAGE_DELETE`
-it records the id and **blocks** the removal, so the message keeps rendering. A small CSS
-class + MutationObserver paint it red and re-apply on scroll/virtualization.
+The renderer captures Discord's real webpack require (via a `Function.prototype.m` setter hook at
+inject time — the chunk-push require misses the entrypoint modules), finds the **real** Flux
+dispatcher (scored by internal `_`-fields, not a facade), and adds an `addInterceptor`: on
+`MESSAGE_DELETE` it records the id and **blocks** the removal, so the message keeps rendering. A CSS
+class + a lazy MutationObserver paint it red (the whole row, so gif/embed-only messages work too)
+and re-apply on scroll/virtualization. Deletes **you** initiate are allow-listed (via a
+`deleteMessage` hook) so they vanish normally. Retention is capped (500) to bound memory.
 
 ## Install
 
@@ -34,13 +41,18 @@ node install.js
 
 Then relaunch Discord. Open DevTools (`Ctrl+Shift+I`) → Console; you should see `[DCMod] ready`.
 
-### Test the feature
-Have someone (or an alt) delete a message in a channel you're viewing. It should turn red and
-show `(deleted)` instead of disappearing.
+### Use it
+- A floating **`DC`** button (bottom-right) opens the UI panel (deleted-viewer toggle/clear; the
+  text-transform buttons are present but use a draft-rewrite model that is being repurposed to
+  send-time toggles — see `PLAN.md`).
+- Have someone (or an alt) delete a message in a channel you're viewing → it turns **red** (no
+  label) instead of disappearing.
+- **Shift+right-click** a red message → removes it from your view (works for gifs/embeds).
 
 Console controls:
-- `DCMod.toggleDeleted()` — turn the viewer on/off
-- `DCMod.clearDeleted()` — drop tracked deletions / clear red styling
+- `DCMod.toggleDeleted()` — viewer on/off · `DCMod.clearDeleted()` — clear all red styling
+- `DCMod.removeLocal(id)` — remove one preserved message
+- `DCMod.perf()` / `DCMod.autoBench()` — perf snapshot / scripted A/B benchmark
 
 ## Iterate
 

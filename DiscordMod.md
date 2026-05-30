@@ -3,7 +3,8 @@
 **Location (code):** `E:\DiscordMod`
 **Target:** Discord **Stable**, Windows 11
 **Stack:** JavaScript / Electron (NOT Python — fully separate from the `E:\Selfbot` Python selfbot)
-**Status:** working foundation + first feature (deleted-message viewer) functional as of 2026-05-29.
+**Status:** deleted-message viewer working + custom UI panel, as of 2026-05-30. Next: send-time
+outgoing transforms (see `PLAN.md`).
 
 ---
 
@@ -37,17 +38,20 @@ They are **complementary**, not overlapping.
 
 ## First feature (the "test"): Deleted-message viewer
 
-Goal: when any message is deleted in a channel the user is viewing (including the user's own),
-it should **stay visible, painted red** instead of vanishing — so the user always sees what was
-deleted. **Right-click a red message to remove it locally** (fully gets rid of it on this client).
+Goal: when a message is deleted **by someone else** in a channel the user is viewing, it should
+**stay visible, painted red** instead of vanishing. Messages **you** delete (your own, or moderating
+others) still **vanish normally**. **Shift+right-click** a red message to remove it from your view
+(works for gif/embed-only messages too).
 
 **How it works (build 1.0.9239):** the renderer captures Discord's real webpack require via a
 `Function.prototype.m` setter hook at inject time (the chunk-push require misses the entrypoint
 modules), finds the **real** FluxDispatcher instance (scored by internal `_`-fields, not a facade),
 and adds an `addInterceptor`. On `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` it records the id and
 **returns `true` to block the removal**, so Discord never takes the message out of the store/DOM.
-A CSS class + a (lazy, idle-free) `MutationObserver` paint the content red and re-apply on
-re-render/virtualization. See `AGENT_NOTES.md` for the full hard-won internals + perf notes.
+Deletes **you** initiate are allow-listed via a `deleteMessage` hook, so they pass through and vanish.
+A CSS class + a lazy `MutationObserver` paint the message **row** red (so gif/embed-only messages
+work) and re-apply on re-render/virtualization. Retention capped at 500. See `AGENT_NOTES.md` for the
+full hard-won internals + perf notes.
 
 Console controls (DevTools console): `DCMod.toggleDeleted()`, `DCMod.clearDeleted()`,
 `DCMod.removeLocal(id)`, plus perf/benchmark: `DCMod.perf()`, `DCMod.autoBench()`.
@@ -128,6 +132,11 @@ Quit Discord, `node uninstall.js` (restores original `app.asar` from `_app.asar`
 | `package.json` | `@electron/asar` dev dep; `install-mod` / `uninstall-mod` scripts. |
 | `README.md` | quick-start. |
 | `DiscordMod.md` | this doc (mirrored to Obsidian vault `Tech/DiscordMod.md`). |
+| `AGENT_NOTES.md` | hard-won internals, perf rules, what breaks and why (read before coding). |
+| `WORKFLOW.md` | safe edit→check→restart→verify loop + rules (read first, esp. smaller models). |
+| `PLAN.md` | corrected UX model + next build plan + undocumented hooks. |
+| `SELFBOT_AND_CLIENT.md` | selfbot feature map + migration plan. |
+| `tools/` | helper scripts: `check` / `iterate` / `restart` / `wait-ready` / `status`. |
 
 ---
 
@@ -152,9 +161,10 @@ Features only a client mod can do (selfbot cannot):
   themes, notification rules.
 
 ### Next concrete step
-Tune the deleted-message viewer on the live client (confirm `addInterceptor` shape +
-`message-content-<id>` selector hold), then build the **pre-send subscript transform** as the
-second feature — that was the original goal that started this whole project.
+Deleted-message viewer is **done and working** (see `PROGRESS.md`). The next build is the
+**send-time outgoing transforms** (owoify / visual styles / pre-send autoanimate) + permtyping +
+settings UI — fully specced in `PLAN.md`. The UI panel exists; its transform buttons must be
+repurposed from draft-rewrite to persistent send-time toggles.
 
 ---
 

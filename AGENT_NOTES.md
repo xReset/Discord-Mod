@@ -162,13 +162,17 @@ Real action shapes (build 1.0.9239):
 
 ## DOM / UX niches (build 1.0.9239)
 
-- **Deleted message styling target:** the message text node has DOM id
-  `message-content-<messageId>`. We add class `dcmod-deleted` (red text only — no label).
-  Confirmed stable; it's how we both style and locate messages.
-- **Right-click removal:** a `contextmenu` listener in CAPTURE phase
-  (`addEventListener("contextmenu", fn, true)`) beats Discord's own handler. We only
-  `preventDefault()` for nodes that are `.dcmod-deleted` (preserved messages) — every other
-  right-click passes through to Discord untouched. Don't swallow globally.
+- **Deleted message styling target:** the text node has DOM id `message-content-<messageId>`
+  (class `dcmod-deleted`, red text, no label). BUT gif/embed-only messages have no text there, so we
+  ALSO tag + style the whole message ROW: find the `li` (via `content.closest('li')` or
+  `li[id*="<id>"]`), add class `dcmod-deleted-row` + `data-dcmod-id=<id>`. See `elsFor(id)`.
+- **Your own deletes vanish; others' stay red.** A `deleteMessage` hook (on the MessageActions
+  aggregate, see below) adds ids YOU delete to `allowDelete`, so the interceptor lets them through.
+  Deletes by others (gateway-only) hit the interceptor with no allow-list entry → blocked → red.
+- **Shift+right-click removal:** a `contextmenu` listener in CAPTURE phase
+  (`addEventListener("contextmenu", fn, true)`). Only acts when `e.shiftKey` AND the target is within
+  a `[data-dcmod-id]` row (or a `.dcmod-deleted` content node); then `preventDefault()` + `removeLocal`.
+  Plain right-click and all non-preserved messages pass through to Discord untouched.
 - **Local removal = replay the real delete:** `removeLocal(id)` adds the id to `allowDelete`
   then re-dispatches the stored `MESSAGE_DELETE` through the dispatcher; the interceptor sees
   it's allow-listed and lets it pass → store drops it → gone from view. (These messages are
@@ -223,7 +227,12 @@ requirement; restart caveat) are in `PLAN.md`.
   fixed per-key getter try/catch. Restart-loop iteration confirmed; hot-reload confirmed dead.
 - 2026-05-30: SOLVED. Function.prototype.m capture → real require (~7700 modules). Score-pick real
   dispatcher (not facade) by `_`-fields. addInterceptor block. Deleted messages persist. ✅ committed.
-- 2026-05-30: UX + perf pass. Red-only (dropped "(deleted)" label + hover-✕). Right-click red msg →
-  removeLocal (capture-phase contextmenu). Lazy MutationObserver (disconnect when no deletions,
-  rAF-coalesced). restoreM() after boot. Perf harness + scripted-scroll autoBench A/B. Our idle
-  overhead measured ~0. Robust findScroller. Noted unbounded-retention scaling risk for many servers.
+- 2026-05-30: UX + perf pass. Red-only (dropped "(deleted)" label + hover-✕). Lazy MutationObserver
+  (disconnect when no deletions, rAF-coalesced). restoreM() after boot. Perf harness + scripted-scroll
+  autoBench A/B. Our idle overhead measured ~0. Robust findScroller. Retention cap (500).
+- 2026-05-30: Removal model finalized. **deleteMessage hook** → your own deletes vanish, others' stay
+  red. Row-based styling/targeting (`dcmod-deleted-row` + `data-dcmod-id`) so gif/embed-only messages
+  work. Removal gesture is **SHIFT+right-click**. Custom UI panel (black/white) with deleted-viewer
+  toggle/clear + (draft-rewrite) transform buttons — buttons to be repurposed to send-time toggles
+  (see PLAN.md). Added WORKFLOW.md + validated tools/ scripts (fixed em-dash PowerShell parse bug).
+  Audited all .md for accuracy.

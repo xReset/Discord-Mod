@@ -44,71 +44,27 @@ intercepted, deleted messages persist. Next: performance benchmarking + optimiza
 
 ---
 
-## Current blocker
+## Dispatcher discovery — SOLVED (was the blocker)
 
-### Root cause: minified source, wrong search strategy
+The old blocker (couldn't find the FluxDispatcher) is solved. Short version: the chunk-push require
+only saw ~102 modules (missed the entrypoint modules where the dispatcher lives), and force-executing
+factories to compensate threw + corrupted modules. Fix: capture the real entrypoint require via a
+`Function.prototype.m` setter hook at inject time (~6000-7700 modules), then score-pick the real
+dispatcher instance (internal `_`-fields) and block via `addInterceptor`.
 
-Confirmed via diag at `2026-05-29T10:35:44`:
-
-```
-diag url=https://discord.com/channels/@me         ← correct main window
-diag chunkLen=562 pushes=9 lastPushAt=561          ← 562 chunks loaded
-diag moduleCount=102 mCount=3144                   ← 102 executed, 3144 registered in wreq.m
-diag wpGlobals=webpackChunkdiscord_app             ← only one webpack global
-diag dispatcherFound=false
-diag countDispatch=0 countInterceptor=0 countSubscribe=0
-```
-
-**The architecture:**
-- Discord uses webpack 5. `wreq.c` = executed module cache (~102). `wreq.m` = all registered factories (3144).
-- Most modules are lazy-loaded; they exist in `wreq.m` but haven't run yet.
-- `findModuleBySource(wreq, "addInterceptor", "dispatch")` → 0 matches.
-- `findModuleBySource(wreq, "waitFor", "dispatch")` → 0 matches.
-- **Reason:** Discord's production build is minified. Method names like `dispatch`, `waitFor`, `subscribe`, `addInterceptor` are compiled to single-letter names (`e.a()`, `n.b()`, etc.). String searches for these method names find nothing.
-
-**What DOES survive minification:**
-- String literals used as action type names: `"MESSAGE_DELETE"`, `"MESSAGE_CREATE"`, `"CONNECTION_OPEN"`, etc.
-- These are enum-style constants that cannot be mangled.
-
-### Secondary blocker: hot-reload re-inject not working
-
-`webContents.executeJavaScript(reinjectCode)` fires (logged), doesn't error, but:
-- No `console-message` event fires from the injected code
-- Old boot loop continues uninterrupted at old attempt numbers
-
-Likely cause: `executeJavaScript` in the main process injects into a DIFFERENT execution context than the preload's `webFrame.executeJavaScript`. The console-message event capture on `webContents` may only fire for the initial page context, not for subsequent `executeJavaScript` calls.
-
-**Workaround:** Not critical for now. The initial boot (via preload) is the working injection path. Re-inject via `executeJavaScript` is a nice-to-have for hot-reload. Since the INITIAL boot needs fixing first, restart-based iteration is fine.
-
----
-
-## Next step
-
-**Fix dispatcher search to use minification-resistant string patterns.**
-
-In `findModuleBySource`, search for action type string literals instead of method names:
-
-```js
-// These survive minification — they're string constants in Discord's source
-findModuleBySource(wreq, '"MESSAGE_DELETE"')
-findModuleBySource(wreq, '"MESSAGE_CREATE"', '"MESSAGE_DELETE"')
-```
-
-A module whose factory source contains `"MESSAGE_DELETE"` is either:
-- The message store (registers a handler for this action)
-- The dispatcher itself (routes this action to stores)
-
-Once the module is found, log its exported keys to identify what it is and which method to hook.
-
-Then:
-1. If it's a store — patch the `MESSAGE_DELETE` handler directly.
-2. If it's the dispatcher — find the subscribe/intercept API (whatever survived under its minified name) by inspecting the exported object's methods.
-
-**Alternative approach (no dispatcher needed):** Instead of intercepting at dispatcher level, intercept at the WebSocket level. Discord receives `MESSAGE_DELETE` as a gateway event. We can hook `WebSocket.prototype.onmessage` or find the gateway module and patch it there — before Flux even sees the event.
+**Full, current internals live in `AGENT_NOTES.md` — do not rely on the historical notes below for
+how to do things now (e.g. force-executing factories is now BANNED).** This file is kept as a record
+of the build journey.
 
 ---
 
 ## Hard-won lessons (what broke and why)
+
+> Historical record. Two rows are SUPERSEDED: the "search for `MESSAGE_DELETE`" and
+> "force-execute `wreq(id)`" dispatcher strategies were dead ends — the real fix is the
+> `Function.prototype.m` require capture (see `AGENT_NOTES.md`); **force-executing factories is now
+> banned.** Also: we now iterate by **restarting** Discord (`tools/restart.ps1`, no `-Force`), not by
+> relying on hot-reload (its logs aren't captured).
 
 | Problem | Root cause | Fix |
 |---|---|---|
@@ -138,16 +94,18 @@ E:\DiscordMod\
 ├── PROGRESS.md             this file
 ├── logs/
 │   └── discord-console.log fresh each session; DCMod lines + errors
+├── tools/                  helper scripts (check / iterate / restart / wait-ready / status)
 └── src/renderer/
-    └── renderer.js         the actual feature code — edit here, hot-reload applies in ~2s
+    └── renderer.js         the feature code — edit here, then RESTART Discord to apply
 ```
+(More docs exist: `AGENT_NOTES.md`, `PLAN.md`, `WORKFLOW.md`, `SELFBOT_AND_CLIENT.md`.)
 
 ---
 
-## Planned features (post-foundation)
+## Planned features → see PLAN.md (authoritative)
 
-1. **Pre-send text transforms** (subscript, fonts, owoify with zero flash) — original motivation
-2. **Inline deleted message viewer** (current test feature — nearly working)
-3. **Inline edit history** — show original text on hover
-4. **Custom UI toggles** — buttons to control selfbot features without `--` commands
-5. **Local filters / keyword highlight**
+- ✅ Inline deleted-message viewer (done — see top of this file).
+- ✅ Custom UI panel (done; transform buttons need repurposing to send-time toggles).
+- ⛔ Pre-send outgoing styles (owoify/visual), pre-send autoanimate, permtyping, settings UI +
+  persistence — the next build, fully specced in `PLAN.md`.
+- Ideas: inline edit history, local filters/keyword highlight.
