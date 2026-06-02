@@ -219,6 +219,16 @@ Real action shapes (build 1.0.9239):
   on `*`. **Transitions only — never keyframe `animation`** (spinners/loading/voice rings must keep
   working). Resource-negative (fewer composited frames). NOT measurable by the longtask harness (it's a
   tween delay, not CPU) — verify by feel / `DCMod.fastUI(false)` A/B.
+- **fastUI flicker fix (2026-06-02):** killing `*` transitions made the **emoji/sticker/gif picker**
+  (`[class*=expressionPicker]`) flicker on open — Discord fades its lazily-rendered grid in to mask the
+  pop, and we were collapsing that fade to ~0. Measured via CDP (`--remote-debugging-port=9222`): fastUI
+  ON forced 200/201 picker els to `0.001s`, nuking ~19 real transitions (0.08–0.25s). Fix: a
+  higher-specificity exception in `injectSpeedStyle` restores **`transition-property:opacity; duration:.15s`**
+  for the picker subtree. **OPACITY ONLY** — restoring `all`/`transform` would animate the virtualized
+  scroller's row positions = scroll jitter. Don't change `revert`/`unset` here: under a `*!important`
+  kill, NO keyword (`revert`/`revert-layer`/`unset`) can re-expose Discord's per-element author values
+  (important-author always beats normal-author, even across cascade layers) — verified empirically, all
+  gave `0s`. Re-declaring opacity@.15s is the only thing that works.
 
 ## Performance (must stay light — user runs many servers)
 
@@ -291,3 +301,7 @@ Full notes in `PLAN.md`.
   item (clone "Copy User ID", CAPTURE-phase listener, ancestor-climb userId, validated UserStore,
   server-vs-default choice, clipboard PNG). **Removed** DC launcher/panel + text transforms +
   `DCMod.transforms`. Added `sign-off` skill + this changelog. Committed + pushed.
+- 2026-06-02: **fastUI sticker-picker flicker fix.** `*{transition-duration:.001s}` was nuking the
+  picker's opacity fade → flicker on open. Diagnosed live over CDP (screenshot/transition measurement).
+  Added a picker-scoped exception restoring `opacity` fade @ .15s (opacity-only to avoid scroll jitter).
+  See the fastUI flicker-fix note above. Verified on fresh boot. Committed + pushed.

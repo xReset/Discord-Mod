@@ -476,6 +476,18 @@
       ? `*, *::before, *::after {
            transition-duration: 0.001s !important;
            transition-delay: 0s !important;
+         }
+         /* The emoji/sticker/gif picker lazily renders its grid; Discord fades
+            content in to mask the pop. The * rule above collapses that fade to
+            ~0, so the grid visibly flickers on open. Restore a real opacity fade
+            here (higher specificity → wins). OPACITY ONLY — never transform/all,
+            so the virtualized scroller's position changes don't animate (that
+            would lag/jitter the scroll). Outer UI still gets instant transitions. */
+         [class*="expressionPicker"], [class*="expressionPicker"] *,
+         [class*="expressionPicker"] *::before, [class*="expressionPicker"] *::after {
+           transition-property: opacity !important;
+           transition-duration: 0.15s !important;
+           transition-delay: 0s !important;
          }`
       : ``;
   }
