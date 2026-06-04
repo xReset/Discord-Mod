@@ -15,7 +15,7 @@
 > 4. This is the **scratch/quirks log**. `DiscordMod.md` = overview, `PROGRESS.md` = build status.
 >    Put durable internals knowledge here.
 
-**Current Discord build observed:** `app-1.0.9239` (Stable, Win11).
+**Current Discord build observed:** `app-1.0.9240` (Stable, Win11). Auto-update is FROZEN — see below.
 
 ---
 
@@ -270,6 +270,64 @@ Real action shapes (build 1.0.9239):
 - Method note: autoBench runs ON phase first, OFF second; second pass can differ (warm caches,
   different rendered content). For rigor, run autoBench 2-3× and average, DevTools closed.
 
+## Environment quirk: stuck launch + can't join VC (NOT a mod bug)
+
+Observed `app-1.0.9239`, 2026-06-03. Discord stalled on "checking for updates" splash
+(~47s) and could not join voice channels. **Not the mod** — DCMod boots clean (dispatcher
+hooked, `ready ✓`); telemetry regex is narrow (only `science|metrics|track`, `sentry.io`,
+`/rtc/quality`) and touches no functional API or voice/gateway endpoints.
+
+Root cause = Discord's **experimental audio subsystem**. `%APPDATA%\discord\settings.json` had:
+```
+"audioSubsystem": "experimental",
+"offloadAdmControls": true,
+```
+Voice log `%APPDATA%\discord\logs\discord-webrtc_0` spammed the Rust ADM failing every device op:
+```
+(rust_adm.cpp:431): Not implemented
+(rust_adm.cpp:582): Audio device module error: -100, device:
+```
+Main log also: `Deferring audio subsystem switch to experimental until next restart.`
+
+**Fix:** set both back to `"standard"` / `false`. **Gotcha:** Discord rewrites settings.json
+from its internal store on launch, so a plain edit-while-quit reverts. Procedure that sticks:
+1. `Stop-Process -Name Discord -Force` (kill ALL procs — confirm count 0).
+2. Edit settings.json → `"audioSubsystem": "standard"`, `"offloadAdmControls": false`.
+3. Set the file **read-only** (`(Get-Item $s).IsReadOnly = $true`) so Discord can't overwrite.
+4. Relaunch: `%LOCALAPPDATA%\Discord\Update.exe --processStart Discord.exe`.
+
+Backup kept at `settings.json.dcmod-bak`. Verified: setting held = `standard` after relaunch.
+Note: some `rust_adm` "Not implemented" lines for volume/mute on empty device are benign boot
+probes; the VC-breaking signature is the experimental subsystem + repeated `-100` on real
+record/playout device selection.
+
+## Auto-update freeze (2026-06-04) — why the mod kept vanishing
+
+**Cause:** Discord (classic Squirrel: `Update.exe` + `packages\RELEASES` + `.nupkg`) checks for
+updates **on every launch** (the "checking for updates" splash) and periodically. On update it
+creates a **fresh `app-<version>\resources\app.asar` folder and DELETES the old one** — taking our
+patched asar with it. `9239 → 9240` installed 2026-06-03 18:14 (PC restart relaunched Discord →
+launch triggered the check). The version bump alone wipes the mod; nothing else broke.
+
+**Fix (implemented):** deny the user the `(AD)` = create-folder right on `%LOCALAPPDATA%\Discord`
+so Squirrel can't land a new `app-<ver>` folder. Discord then keeps launching the current modded
+version. File writes (installer.db, logs, `Update.exe --processStart` relaunch) still work — only
+NEW sub-folder creation is blocked. Verified: folder-create denied, file-write OK, client boots.
+
+- Freeze:   `tools/freeze-version.ps1`   → `icacls %LOCALAPPDATA%\Discord /deny "<user>:(AD)"`
+- Unfreeze: `tools/unfreeze-version.ps1` → `icacls ... /remove:d <user>`
+- ACL check: `icacls %LOCALAPPDATA%\Discord` should show `<user>:(DENY)(AD)`.
+
+**To update ON PURPOSE (the only allowed path):**
+1. `tools/unfreeze-version.ps1`
+2. Launch Discord, let it update to the new `app-<version>`.
+3. Fully quit Discord.
+4. `node install.js`  (re-patch the new version — re-detects newest `app-<ver>`).
+5. `tools/freeze-version.ps1`  (re-block).
+
+Note: SYSTEM/Administrators keep Full Control, but Discord's updater runs as the **user**, so the
+user-scoped deny is sufficient. Don't delete/rename `Update.exe` — Discord relaunches through it.
+
 ## Next work → see PLAN.md
 
 Direction: a client **strictly faster/lighter than vanilla** + QOL. Done: snipe, telemetry block,
@@ -305,3 +363,12 @@ Full notes in `PLAN.md`.
   picker's opacity fade → flicker on open. Diagnosed live over CDP (screenshot/transition measurement).
   Added a picker-scoped exception restoring `opacity` fade @ .15s (opacity-only to avoid scroll jitter).
   See the fastUI flicker-fix note above. Verified on fresh boot. Committed + pushed.
+- 2026-06-04: Discord auto-updated 9239→9240 (Squirrel, on-launch check after PC restart) → new
+  app-<ver> folder replaced the modded one → mod gone. Re-ran install.js to patch 9240 (verified
+  ready ✓, dispatcher hooked). FROZE auto-update: `icacls /deny <user>:(AD)` on %LOCALAPPDATA%\Discord
+  blocks new app-<ver> folder creation. Added tools/freeze-version.ps1 + unfreeze-version.ps1 + the
+  manual-update procedure above. Bumped build to 9240.
+- 2026-06-03: SOLVED env issue — stuck launch + can't join VC. Root cause Discord's experimental
+  audio subsystem (`rust_adm.cpp` "Not implemented" / ADM error -100), NOT the mod. Reverted
+  settings.json `audioSubsystem`→`standard`, `offloadAdmControls`→`false`, set file read-only so
+  Discord can't rewrite it on launch. See "Environment quirk" section above. Verified held.

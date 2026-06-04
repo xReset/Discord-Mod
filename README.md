@@ -81,10 +81,22 @@ Console controls:
 Edit `src/renderer/renderer.js`, then **fully restart Discord**. No re-install needed — the
 preload reads the file fresh on every launch.
 
-## Update / uninstall
+## Auto-update is frozen
 
-- **After a Discord update** (new `app-<version>` folder), re-run `node install.js`.
-- **Remove the mod:** quit Discord, `node uninstall.js`, restart.
+Discord's Squirrel updater installs each update as a new `app-<version>` folder and deletes the old
+one — which wipes the patched `app.asar`. `tools/freeze-version.ps1` denies the user the
+create-folder right on `%LOCALAPPDATA%\Discord`, so updates can't land and Discord keeps launching
+the modded build. Current frozen build: `app-1.0.9240`.
+
+**To update on purpose (the only way it updates):**
+1. `tools\unfreeze-version.ps1`
+2. Launch Discord, let it update; then fully quit.
+3. `node install.js` (re-patch the new version).
+4. `tools\freeze-version.ps1` (re-block).
+
+## Uninstall
+
+- Quit Discord, `tools\unfreeze-version.ps1` (lift the freeze), `node uninstall.js`, restart.
 
 ## Caveats
 

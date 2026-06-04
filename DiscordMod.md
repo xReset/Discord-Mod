@@ -121,12 +121,19 @@ Relaunch Discord → `Ctrl+Shift+I` → Console should show:
 Edit `src/renderer/renderer.js`, then **fully restart Discord**. No re-install — preload reads the
 file fresh each launch.
 
-### After a Discord update
-Updates create a new `app-<version>` folder with a fresh untouched `app.asar`. Re-run
-`node install.js` to re-inject.
+### Auto-update is frozen (build 1.0.9240)
+Discord's Squirrel updater installs each update as a new `app-<version>` folder and deletes the old
+one, wiping the patched `app.asar` (this is why the mod "disappeared" after `9239→9240` on
+2026-06-03). `tools/freeze-version.ps1` denies the user the create-folder right on
+`%LOCALAPPDATA%\Discord` (`icacls /deny <user>:(AD)`) so no new `app-<ver>` can be installed; file
+writes and the `Update.exe --processStart` relaunch still work. `tools/unfreeze-version.ps1` lifts it.
+
+**Update on purpose:** `unfreeze-version.ps1` → launch Discord, let it update → quit →
+`node install.js` (re-patch) → `freeze-version.ps1` (re-block).
 
 ### Uninstall
-Quit Discord, `node uninstall.js` (restores original `app.asar` from `_app.asar`), restart.
+Quit Discord, `tools/unfreeze-version.ps1`, `node uninstall.js` (restores original `app.asar` from
+`_app.asar`), restart.
 
 ---
 
@@ -135,6 +142,8 @@ Quit Discord, `node uninstall.js` (restores original `app.asar` from `_app.asar`
 |---|---|
 | `install.js` | finds Discord resources, backs up `app.asar`→`_app.asar`, generates + packs the shim. Exports `buildShim` for testing. |
 | `uninstall.js` | restores original `app.asar`. |
+| `tools/freeze-version.ps1` | denies create-folder on `%LOCALAPPDATA%\Discord` → blocks Squirrel auto-update. |
+| `tools/unfreeze-version.ps1` | removes the deny-rule so Discord can update (use before a manual update). |
 | `src/renderer/renderer.js` | the feature code (main-world). Where new features go. |
 | `package.json` | `@electron/asar` dev dep; `install-mod` / `uninstall-mod` scripts. |
 | `README.md` | quick-start. |

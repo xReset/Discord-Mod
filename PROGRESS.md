@@ -1,10 +1,21 @@
 # DiscordMod — Build Progress
 
-**Last updated:** 2026-05-30
+**Last updated:** 2026-06-04
 **Current status:** ✅ Snipe (deleted viewer), ✅ telemetry blocking, ✅ fast-UI, ✅ Copy-Avatar
-context-menu item all working. The old DC launcher/panel UI and the text-transform feature were
-**removed** (dead weight). Direction now: a client strictly faster/lighter than vanilla + QOL.
-Next roadmap: hover-prefetch DMs/channels, message-store retention, GIF-favorites cache, edit-snipe.
+context-menu item all working on **build 1.0.9240**. Auto-update **frozen** (icacls deny-folder on
+`%LOCALAPPDATA%\Discord`) so updates can't wipe the mod. The old DC launcher/panel UI and the
+text-transform feature were **removed** (dead weight). Direction now: a client strictly
+faster/lighter than vanilla + QOL. Next roadmap: hover-prefetch DMs/channels, message-store
+retention, GIF-favorites cache, edit-snipe.
+
+## 2026-06-04 — auto-update freeze
+
+- Discord auto-updated `9239→9240` (Squirrel on-launch check after PC restart); new `app-<ver>`
+  folder replaced the modded one → mod gone. Re-ran `node install.js` to patch 9240 (verified
+  `dispatcherFound=true`, `hasAddInterceptor=true`, MESSAGE_DELETE intercepted).
+- Froze future updates: `tools/freeze-version.ps1` = `icacls %LOCALAPPDATA%\Discord /deny <user>:(AD)`
+  blocks new `app-<ver>` folder creation. `tools/unfreeze-version.ps1` reverts. Manual-update
+  procedure documented in README / AGENT_NOTES.
 
 ## 2026-05-30 — feature working
 
