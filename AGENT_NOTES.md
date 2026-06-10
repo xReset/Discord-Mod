@@ -205,6 +205,32 @@ Real action shapes (build 1.0.9239):
   `navigator.clipboard.write([new ClipboardItem({"image/png": blob})])`. Runs in the click gesture → allowed.
   Canvas-convert as a fallback if a non-png ever comes back.
 
+## Window-control (min/maximize) fix — build 1.0.9240 (2026-06-10)
+
+- **Symptom:** titlebar minimize/maximize buttons do nothing.
+- **Diagnosis (use temp probes → `logs/discord-console.log`, NOT guesswork):**
+  - Buttons exist, sized 32×32, inside `trailing(no-drag) > bar(drag)` → input/drag layer is fine.
+    `elementFromPoint` at the button center returns the button (not covered). NOTE: `elementFromPoint`
+    is DOM hit-test only — it can't see `-webkit-app-region: drag` capture, so it does NOT prove
+    clickability; check the `no-drag` ancestor instead.
+  - `DiscordNative.window` has `minimize/maximize/restore`, but renderer `maximize()` **no-ops**
+    (`window.outerHeight` unchanged). Main-process `win.maximize()` **works**
+    (`isMaximized=true`, bounds grow). ⇒ Discord's renderer→main window-control IPC is dead on this
+    frozen build; the Electron window is fully maximizable/minimizable (`isResizable/isMaximizable=true`,
+    no min==max lock).
+- **Fix = our own bridge** (don't rely on Discord's IPC):
+  - `preload.js`: `contextBridge.exposeInMainWorld("DCModNative", {minimize,toggleMaximize,close})`,
+    each doing `ipcRenderer.send("DCMOD_WINCTL", action)`. Fallback `window.DCModNative=` if isolation off.
+  - shim `index.js`: `ipcMain.on("DCMOD_WINCTL", …)` → `BrowserWindow.fromWebContents(event.sender)` →
+    `minimize()` / `isMaximized()?unmaximize():maximize()` / `close()`.
+  - renderer `installWindowControls()`: capture-phase `click` on `[class*="winButton"]`, skip the 0×0
+    leading set, read `aria-label` (minimize / maximize / restore), call the bridge. No `preventDefault`
+    so Discord's own inert handler still runs harmlessly. Close left to Discord.
+- **Verified end-to-end:** bridge `toggleMaximize()` drove 720→1392 and restored (same path as a click).
+- These probes also revealed the **hot-reload reinject is broken** (file-change `re-injecting` logs but
+  the new IIFE never re-emits `renderer injected` — the guard isn't actually re-running new code). Not
+  fixed here (out of scope); iterate via full restart (`tools` / Stop-Process + Update.exe) for now.
+
 ## Telemetry blocking + fast-UI (2026-05-30)
 
 - **`noTrack` (default ON):** interceptor returns `true` (drops) for action types `TRACK` /
@@ -372,3 +398,10 @@ Full notes in `PLAN.md`.
   audio subsystem (`rust_adm.cpp` "Not implemented" / ADM error -100), NOT the mod. Reverted
   settings.json `audioSubsystem`→`standard`, `offloadAdmControls`→`false`, set file read-only so
   Discord can't rewrite it on launch. See "Environment quirk" section above. Verified held.
+- 2026-06-10: **Window-control (min/maximize) fix.** Titlebar buttons dead on 9240 — diagnosed via
+  temp probes that Discord's renderer `DiscordNative.window.maximize()` no-ops while main-process
+  `win.maximize()` works (so it's Discord's IPC, not the Electron window). Added own bridge: preload
+  `DCModNative` (`contextBridge`→`ipcRenderer`) → shim `ipcMain DCMOD_WINCTL` → `win.minimize/maximize/
+  unmaximize`; renderer `installWindowControls()` catches `winButton` clicks. Verified end-to-end
+  (toggleMaximize 720→1392→restore). No perf change (idle overhead already ~0; logged blocking is
+  Discord's). Also noted hot-reload reinject is broken (separate, out of scope). Committed + pushed.

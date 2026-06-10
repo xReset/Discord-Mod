@@ -1055,6 +1055,45 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Window controls (minimize / maximize-restore) bridge.
+  //
+  // This frozen Discord build (9240) has a DEAD renderer→main IPC for the custom
+  // titlebar buttons: DiscordNative.window.minimize()/maximize() are no-ops, so
+  // the min/maximize buttons appear but do nothing. The Electron window itself is
+  // fully resizable/maximizable (verified main-process win.maximize() works). We
+  // route clicks through our OWN bridge (preload exposes DCModNative → shim ipcMain
+  // → win.minimize()/maximize()/unmaximize()). Close is left to Discord. Capture
+  // phase + no preventDefault so Discord's own (inert) handler still runs harmlessly.
+  // ---------------------------------------------------------------------------
+  function installWindowControls() {
+    if (window.__DCMOD_WINCTL__) return;
+    const api = window.DCModNative;
+    if (!api || typeof api.minimize !== "function") {
+      log("window controls: DCModNative bridge missing — skipping");
+      return;
+    }
+    window.__DCMOD_WINCTL__ = true;
+    document.addEventListener(
+      "click",
+      (e) => {
+        try {
+          if (!e.target || !e.target.closest) return;
+          const btn = e.target.closest('[class*="winButton"]');
+          if (!btn) return;
+          const r = btn.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) return; // skip the collapsed (0x0) leading set
+          const label = (btn.getAttribute("aria-label") || "").toLowerCase();
+          if (label === "minimize") api.minimize();
+          else if (label === "maximize" || label === "restore") api.toggleMaximize();
+          // "close" intentionally falls through to Discord's own handler.
+        } catch (err) {}
+      },
+      true // capture: beat Discord's (inert) handler
+    );
+    log("window controls bridged (min/maximize via DCModNative)");
+  }
+
+  // ---------------------------------------------------------------------------
   // Public toggle (use from DevTools console)
   // ---------------------------------------------------------------------------
   window.DCMod = {
@@ -1216,6 +1255,7 @@
     installObserver();
     installContextMenu();
     installAvatarMenu();
+    installWindowControls();
     hookOutgoingDeletes();
     restoreM(); // dispatcher captured — stop taxing every Function .m read
     log("ready ✓  (toggle with DCMod.toggleDeleted())");

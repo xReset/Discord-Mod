@@ -60,8 +60,10 @@ Console controls (DevTools console): `DCMod.toggleDeleted()`, `DCMod.clearDelete
 `DCMod.fastUI(bool?)` (instant transitions), plus perf: `DCMod.perf()`, `DCMod.autoBench()`.
 
 **Other features now live:** telemetry blocking (Flux `TRACK` + fetch/XHR/sendBeacon, default ON),
-fast-UI (zeroes transition tweens, default ON), and a **Copy Avatar** user-context-menu item
-(server-vs-default choice, hi-res PNG to clipboard). See `AGENT_NOTES.md` for internals.
+fast-UI (zeroes transition tweens, default ON), a **Copy Avatar** user-context-menu item
+(server-vs-default choice, hi-res PNG to clipboard), and a **window-control fix** that re-wires the
+dead titlebar minimize/maximize buttons through our own `DCModNative` ipc bridge (this 9240 build's
+own window-control IPC no-ops). See `AGENT_NOTES.md` for internals.
 
 ---
 

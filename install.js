@@ -183,6 +183,24 @@ Module._load = function (request, parent, isMain) {
   return mod;
 };
 
+// Window-control bridge (main side). This frozen Discord build's own renderer→main
+// window-control IPC is dead (DiscordNative.window.minimize/maximize no-op), so the
+// titlebar min/maximize buttons do nothing. The Electron window is fully capable, so
+// we perform the action directly on the sender's window. Renderer triggers via the
+// DCModNative bridge exposed in preload.js.
+try {
+  const electron = require("electron");
+  electron.ipcMain.on("DCMOD_WINCTL", function (event, action) {
+    try {
+      const win = electron.BrowserWindow.fromWebContents(event.sender);
+      if (!win) return;
+      if (action === "minimize") win.minimize();
+      else if (action === "toggleMaximize") win.isMaximized() ? win.unmaximize() : win.maximize();
+      else if (action === "close") win.close();
+    } catch (e) {}
+  });
+} catch (e) {}
+
 // Hand control to the original, untouched Discord app.
 require(${ORIG});
 `.trimStart();
@@ -190,8 +208,25 @@ require(${ORIG});
   const preloadJs = `
 // DiscordMod preload — chains Discord's original preload, then injects renderer into main world.
 const fs = require("fs");
-const { webFrame } = require("electron");
+const { webFrame, contextBridge, ipcRenderer } = require("electron");
 const RENDERER_PATH = ${RENDERER};
+
+// Expose a working window-control bridge to the page's main world. The renderer
+// calls these because this build's DiscordNative.window.minimize/maximize are dead.
+try {
+  const winApi = {
+    minimize: function () { ipcRenderer.send("DCMOD_WINCTL", "minimize"); },
+    toggleMaximize: function () { ipcRenderer.send("DCMOD_WINCTL", "toggleMaximize"); },
+    close: function () { ipcRenderer.send("DCMOD_WINCTL", "close"); },
+  };
+  try {
+    contextBridge.exposeInMainWorld("DCModNative", winApi); // contextIsolation ON (Discord default)
+  } catch (e) {
+    window.DCModNative = winApi; // fallback if isolation is off
+  }
+} catch (e) {
+  console.error("[DCMod] window-control bridge failed:", e);
+}
 
 // 1) Run Discord's real preload so DiscordNative / window APIs exist.
 try {

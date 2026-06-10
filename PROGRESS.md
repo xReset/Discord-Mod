@@ -1,12 +1,29 @@
 # DiscordMod — Build Progress
 
-**Last updated:** 2026-06-04
+**Last updated:** 2026-06-10
 **Current status:** ✅ Snipe (deleted viewer), ✅ telemetry blocking, ✅ fast-UI, ✅ Copy-Avatar
-context-menu item all working on **build 1.0.9240**. Auto-update **frozen** (icacls deny-folder on
+context-menu item, ✅ window-control fix (min/maximize) all working on **build 1.0.9240**. Auto-update **frozen** (icacls deny-folder on
 `%LOCALAPPDATA%\Discord`) so updates can't wipe the mod. The old DC launcher/panel UI and the
 text-transform feature were **removed** (dead weight). Direction now: a client strictly
 faster/lighter than vanilla + QOL. Next roadmap: hover-prefetch DMs/channels, message-store
 retention, GIF-favorites cache, edit-snipe.
+
+## 2026-06-10 — window-control (min/maximize) fix
+
+- Symptom: titlebar **minimize / maximize** buttons do nothing on build 9240.
+- Diagnosed (temp probes piped to `logs/discord-console.log`): buttons exist, sized 32×32, inside a
+  `no-drag` wrapper of the `drag` titlebar, not covered — so input layer is fine. `DiscordNative.window`
+  exposes `minimize/maximize/restore` but calling `maximize()` from the renderer **no-ops** (720→720).
+  Main-process `win.maximize()` **works** (720→1392, `isMaximized=true`). ⇒ Discord's renderer→main
+  window-control IPC is dead on this frozen build; the Electron window itself is fully capable.
+- Fix: own bridge. `preload.js` exposes `DCModNative` (`contextBridge`) →
+  `ipcRenderer.send('DCMOD_WINCTL', action)`; shim `index.js` `ipcMain.on` runs
+  `win.minimize()/maximize()/unmaximize()` on `BrowserWindow.fromWebContents(sender)`. Renderer
+  `installWindowControls()` catches `winButton` min/maximize clicks (capture phase, no preventDefault)
+  and calls the bridge. Close left to Discord. Verified end-to-end: bridge `toggleMaximize()` drove
+  720→1392 and restored.
+- No perf change needed: idle perf logs show `intN=0 obsN=0` (our hooks cost ~0); the main-thread
+  blocking in the logs is Discord's own, not ours.
 
 ## 2026-06-04 — auto-update freeze
 

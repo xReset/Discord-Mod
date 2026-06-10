@@ -13,6 +13,9 @@ Features today:
 - **Copy Avatar** — adds a native-looking item to the user context menu that copies a hi-res avatar PNG
   to your clipboard. In a server where they have a server-specific pfp you get both *Copy Server Avatar*
   and *Copy Avatar*.
+- **Window-control fix** — on this frozen 9240 build Discord's own titlebar **minimize / maximize**
+  buttons are dead (its renderer→main IPC for window controls no-ops). We route those clicks through
+  our own bridge (preload `ipcRenderer` → shim `ipcMain` → `win.minimize()/maximize()`) so they work.
 
 This is fully our own injector (not Vencord/BetterDiscord). It loads the original Discord app
 untouched and adds a chained preload that injects our renderer script.
@@ -43,7 +46,12 @@ The same dispatcher hook also blocks `TRACK` analytics actions; a fetch/XHR/send
 (installed pre-webpack) drops telemetry network calls. A static stylesheet zeroes UI transitions
 (`fastUI`). A capture-phase `contextmenu` listener parses the right-clicked user's avatar to inject
 the **Copy Avatar** item, cloned from Discord's own "Copy User ID" item so styling matches exactly;
-hi-res URLs come from UserStore / GuildMemberStore.
+hi-res URLs come from UserStore / GuildMemberStore. A capture-phase `click` listener catches the
+titlebar `winButton` min/maximize clicks and drives them through the `DCModNative` window-control
+bridge (preload `ipcRenderer.send('DCMOD_WINCTL', …)` → shim `ipcMain` → the sender window's
+`minimize()` / `maximize()` / `unmaximize()`), because Discord's own window-control IPC is dead on
+this build. Verified: main-process `win.maximize()` works while renderer `DiscordNative.window.maximize()`
+no-ops, confirming the break is Discord's IPC, not the Electron window (which is fully maximizable).
 
 **Perf:** our hooks cost ~0 at idle (verified). The interceptor early-outs on non-delete actions before
 any timing; perf timing is gated behind a `_measuring` flag (off unless benchmarking). See `AGENT_NOTES.md`.
