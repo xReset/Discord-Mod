@@ -32,7 +32,7 @@
   // ---------------------------------------------------------------------------
   const _SETTINGS_KEY = "dcmod:settings";
   const _settings = (function () {
-    const defaults = { noTrack: true, fastUI: true, enabled: true, debug: false };
+    const defaults = { noTrack: true, fastUI: true, enabled: true, prefetch: true, debug: false };
     try {
       const raw = localStorage.getItem(_SETTINGS_KEY);
       if (raw) return Object.assign(defaults, JSON.parse(raw));
@@ -475,6 +475,11 @@
         box-shadow: inset 2px 0 0 #f04747 !important;
         background: rgba(240, 71, 71, 0.06) !important;
       }
+      /* Ghost ping (deleted message that mentioned you) — orange, stronger marker. */
+      .dcmod-ghostping-row {
+        box-shadow: inset 3px 0 0 #faa61a !important;
+        background: rgba(250, 166, 26, 0.10) !important;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -526,6 +531,74 @@
   let enabled = _settings.enabled;
   let _dispatcher = null;
 
+  // Edit-snipe: pre-edit content captured on MESSAGE_UPDATE (id -> [{t,from,to}]).
+  // Ghost-ping: ids of deleted messages that mentioned YOU (styled distinctly).
+  const editHistory = new Map();
+  const ghostPings = new Set();
+  const EDIT_CAP = 300; // bound the edit-history map over long sessions
+
+  // MessageStore + current-user id — resolved lazily (used by edit-snipe/ghost-ping).
+  let _MessageStore = null;
+  function _msgStore() {
+    if (!_MessageStore || typeof _MessageStore.getMessage !== "function") {
+      _MessageStore = findByPropsAll("getMessage", "getMessages");
+    }
+    return _MessageStore;
+  }
+  function _selfId() {
+    try {
+      const u = _stores().U;
+      const cu = u && u.getCurrentUser && u.getCurrentUser();
+      return cu && cu.id;
+    } catch (e) {
+      return null;
+    }
+  }
+  function _msgFromStore(channelId, id) {
+    try {
+      const s = _msgStore();
+      return s && s.getMessage ? s.getMessage(channelId, id) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Capture pre-edit content BEFORE the MESSAGE_UPDATE applies (interceptor runs
+  // before the store mutates). Store the old→new pair. Skips embed-only updates
+  // (same content) so it only records real user edits.
+  function captureEdit(action) {
+    try {
+      const m = action && action.message;
+      if (!m || !m.id) return;
+      const chan = m.channel_id || m.channelId;
+      const oldMsg = _msgFromStore(chan, m.id);
+      const oldContent = oldMsg && oldMsg.content;
+      const newContent = m.content;
+      if (oldContent == null || newContent == null || oldContent === newContent) return;
+      const arr = editHistory.get(m.id) || [];
+      arr.push({ t: Date.now(), from: oldContent, to: newContent, channelId: chan });
+      editHistory.set(m.id, arr);
+      while (editHistory.size > EDIT_CAP) editHistory.delete(editHistory.keys().next().value);
+      if (DEBUG) log("editSnipe captured id=" + m.id + " revs=" + arr.length);
+    } catch (e) {}
+  }
+
+  // Ghost ping = a message that @mentioned YOU, deleted before you (may have) read it.
+  // Read the message from the store BEFORE the delete drops it; check self-mention.
+  function _isGhostPing(id, channelId) {
+    try {
+      const msg = _msgFromStore(channelId, id);
+      if (!msg) return false;
+      const me = _selfId();
+      if (!me) return false;
+      if (Array.isArray(msg.mentions) && msg.mentions.some((u) => (u && u.id ? u.id : u) === me)) return true;
+      if (msg.mentioned === true) return true;
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Locate the text node AND the message row for a message id. Gif/embed-only
   // messages may have no message-content text node, so we also find the row by id.
   const _rowCache = new Map(); // id -> last-resolved <li> (validated by isConnected)
@@ -564,6 +637,10 @@
         row.dataset.dcmodId = id;
       } catch (e) {}
     }
+    // Ghost pings (deleted messages that @mentioned you) get a distinct orange marker.
+    if (row && ghostPings.has(id) && !row.classList.contains("dcmod-ghostping-row")) {
+      row.classList.add("dcmod-ghostping-row");
+    }
   }
 
   function applyAll() {
@@ -599,6 +676,7 @@
   function removeLocal(id) {
     id = String(id);
     deletedIds.delete(id);
+    ghostPings.delete(id);
     _rowCache.delete(id);
     allowDelete.add(id);
     const { content, row } = elsFor(id, true);
@@ -711,6 +789,11 @@
         _telBlocked++;
         return true;
       }
+      // Edit-snipe: capture the pre-edit content, then let the update through (never block).
+      if (type === "MESSAGE_UPDATE") {
+        if (enabled) captureEdit(action);
+        return false;
+      }
       if (type !== "MESSAGE_DELETE" && type !== "MESSAGE_DELETE_BULK") return false;
       const _t0 = _measuring ? performance.now() : 0;
       let result = false;
@@ -725,6 +808,11 @@
               if (allowDelete.has(action.id)) {
                 allowDelete.delete(action.id); // consume — id is single-use, bounds the Set
               } else {
+                // Ghost-ping detection: did this deleted message @mention you?
+                if (_isGhostPing(action.id, action.channelId)) {
+                  ghostPings.add(action.id);
+                  log("GHOST PING preserved id=" + action.id + " chan=" + action.channelId);
+                }
                 markDeleted(action.id, action);
                 result = true; // block removal
               }
@@ -1137,6 +1225,74 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Hover-prefetch — on sustained hover (~150ms intent) over a channel/DM in the
+  // sidebar, warm its message cache via Discord's own fetch action so the click
+  // opens it instantly. Bounded so it's a small eager fetch, not a storm:
+  //   - 150ms hover intent (ignores mouse just passing through),
+  //   - dedupe per channel for 30s,
+  //   - skip the channel you're already viewing,
+  //   - all guarded in try/catch (a wrong signature is a silent no-op, never a crash).
+  // Toggle: DCMod.prefetch(bool). Uses a REAL API (not telemetry) — nothing blocked.
+  // ---------------------------------------------------------------------------
+  let _prefetch = _settings.prefetch !== false;
+  let _MessageFetch = null;
+  const _prefetched = new Map(); // channelId -> last prefetch time (dedupe)
+  const PREFETCH_TTL = 30000;
+  const PREFETCH_INTENT_MS = 150;
+
+  function _fetchAction() {
+    if (!_MessageFetch || typeof _MessageFetch.fetchMessages !== "function") {
+      _MessageFetch = findByPropsAll("fetchMessages") || null;
+    }
+    return _MessageFetch;
+  }
+
+  function _prefetchChannel(channelId) {
+    if (!_prefetch || !channelId) return;
+    const now = Date.now();
+    const last = _prefetched.get(channelId);
+    if (last && now - last < PREFETCH_TTL) return; // recently prefetched → skip
+    const cur = location.pathname.match(/\/channels\/[^/]+\/(\d+)/);
+    if (cur && cur[1] === channelId) return; // already viewing this channel
+    const MF = _fetchAction();
+    if (!MF) return;
+    _prefetched.set(channelId, now);
+    if (_prefetched.size > 200) _prefetched.delete(_prefetched.keys().next().value); // bound
+    try {
+      MF.fetchMessages({ channelId: channelId, limit: 50 });
+      if (DEBUG) log("prefetch channel=" + channelId);
+    } catch (e) {
+      if (DEBUG) warn("prefetch failed", String(e));
+    }
+  }
+
+  function installHoverPrefetch() {
+    if (window.__DCMOD_PREFETCH__) return;
+    window.__DCMOD_PREFETCH__ = true;
+    let timer = null;
+    let pendingChan = null;
+    document.addEventListener(
+      "mouseover",
+      (e) => {
+        try {
+          if (!_prefetch || !e.target || !e.target.closest) return;
+          const link = e.target.closest('a[href*="/channels/"]');
+          if (!link) return;
+          const m = (link.getAttribute("href") || "").match(/\/channels\/[^/]+\/(\d+)/);
+          if (!m) return;
+          const chan = m[1];
+          if (chan === pendingChan) return; // same target, intent timer already armed
+          pendingChan = chan;
+          clearTimeout(timer);
+          timer = setTimeout(() => _prefetchChannel(chan), PREFETCH_INTENT_MS);
+        } catch (err) {}
+      },
+      true
+    );
+    log("hover-prefetch installed (fetchAction=" + (_fetchAction() ? "found" : "MISSING") + ")");
+  }
+
+  // ---------------------------------------------------------------------------
   // Public toggle (use from DevTools console)
   // ---------------------------------------------------------------------------
   window.DCMod = {
@@ -1164,6 +1320,14 @@
       log("fast UI (instant transitions) " + (_fastUI ? "ON" : "OFF"));
       return _fastUI;
     },
+    // Hover-prefetch: warm a channel's messages on hover so it opens instantly.
+    prefetch(on) {
+      if (on !== undefined) _prefetch = !!on;
+      _settings.prefetch = _prefetch;
+      _saveSettings();
+      log("hover-prefetch " + (_prefetch ? "ON" : "OFF"));
+      return _prefetch;
+    },
     // Toggle chatty dev logs (per-delete dump, 5-min perf sampler, eviction lines).
     // Persisted; takes full effect on next restart for the perf sampler.
     debug(on) {
@@ -1175,11 +1339,26 @@
     },
     clearDeleted() {
       document.querySelectorAll(".dcmod-deleted").forEach((el) => el.classList.remove("dcmod-deleted"));
+      document.querySelectorAll(".dcmod-ghostping-row").forEach((el) => el.classList.remove("dcmod-ghostping-row"));
       deletedIds.clear();
+      ghostPings.clear();
       _rowCache.clear();
       log("cleared tracked deletions");
     },
     removeLocal: (id) => removeLocal(id),
+    // Edit-snipe: return the captured pre-edit revisions for a message id ([] if none).
+    editSnipe(id) {
+      const revs = editHistory.get(String(id)) || [];
+      log("editSnipe id=" + id + " revisions=" + revs.length);
+      revs.forEach((r, i) => log("  [" + i + "] from=" + JSON.stringify(r.from) + " to=" + JSON.stringify(r.to)));
+      return revs;
+    },
+    // Ghost-ping snipe: list ids of deleted messages that @mentioned you this session.
+    ghostPings() {
+      const ids = Array.from(ghostPings);
+      log("ghostPings count=" + ids.length + " ids=[" + ids.join(",") + "]");
+      return ids;
+    },
     diag: () => diag(),
     perf() {
       const s = perfSnapshot();
@@ -1314,6 +1493,7 @@
     installContextMenu();
     installAvatarMenu();
     installWindowControls();
+    installHoverPrefetch();
     const _delOk = hookOutgoingDeletes();
     restoreM(); // dispatcher captured — stop taxing every Function .m read
     log("ready ✓  (toggle with DCMod.toggleDeleted())");
@@ -1328,6 +1508,8 @@
       " ctxMenu=" + (window.__DCMOD_CTX_INSTALLED__ ? "ok" : "FAIL") +
       " avatarMenu=" + (window.__DCMOD_AVATAR__ ? "ok" : "FAIL") +
       " winctl=" + (window.__DCMOD_WINCTL__ ? "ok" : "skip") +
+      " msgStore=" + (_msgStore() ? "ok" : "miss") +
+      " prefetch=" + (window.__DCMOD_PREFETCH__ ? (_fetchAction() ? "ok" : "no-fetch-action") : "off") +
       " settings=" + JSON.stringify(_settings)
     );
     diag(); // auto-dump state so the log file is self-sufficient

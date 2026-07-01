@@ -8,6 +8,20 @@ text-transform feature were **removed** (dead weight). Direction now: a client s
 faster/lighter than vanilla + QOL. Next roadmap: hover-prefetch DMs/channels, message-store
 retention, GIF-favorites cache, edit-snipe.
 
+## 2026-06-30 — Phase 5 features (edit-snipe, ghost-ping, hover-prefetch)
+
+- **Edit-snipe:** interceptor captures pre-edit content on `MESSAGE_UPDATE` (reads old message from
+  MessageStore before the update applies), stores old→new revisions (cap 300). Query `DCMod.editSnipe(id)`.
+- **Ghost-ping snipe:** a deleted message that @mentioned you is detected (MessageStore + your user id),
+  preserved with a distinct **orange** marker (over the red), logged (`GHOST PING preserved`), listed via
+  `DCMod.ghostPings()`.
+- **Hover-prefetch:** on ~150ms hover intent over a channel/DM, warm its messages via Discord's
+  `fetchMessages({channelId, limit:50})` so the click opens instantly. Bounded (30s per-channel dedupe,
+  skip current channel, guarded). Toggle `DCMod.prefetch`. **Fired live on 9243 with no error** (signature
+  confirmed). Health line extended: `msgStore=ok prefetch=ok`. Idle self-overhead still 0.
+- **Deferred (reasons):** MessageStore retention (stale/memory risk), GIF-favorites cache (complexity),
+  spellchecker-off (needs consent — loses red-underline), offscreen-autoplay-throttle (playback risk).
+
 ## 2026-06-30 — update to 9243 + bugfix/hardening/test pass
 
 - **Updated 9240→9243** (unfreeze→launch→install.js→freeze). Internals unchanged — dispatcher found as

@@ -84,6 +84,9 @@ Console controls:
 - `DCMod.fastUI(bool?)` — instant transitions on/off (A/B the feel)
 - `DCMod.perf()` / `DCMod.autoBench()` — perf snapshot / scripted A/B benchmark
 - `DCMod.debug(bool?)` — chatty dev logs on/off (per-delete dump, 5-min perf sampler, eviction lines)
+- `DCMod.editSnipe(id)` — pre-edit revisions captured for a message (edit-snipe)
+- `DCMod.ghostPings()` — ids of deleted messages that @mentioned you this session (styled **orange**)
+- `DCMod.prefetch(bool?)` — hover-prefetch on/off (warms a channel's messages on hover → instant open)
 
 Settings (`noTrack` / `fastUI` / deleted-viewer on-off / `debug`) **persist across restarts**
 (`localStorage` key `dcmod:settings`) — set once and it sticks.

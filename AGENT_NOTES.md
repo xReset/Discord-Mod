@@ -389,6 +389,31 @@ Full notes in `PLAN.md`.
   picker still opens with no flicker, (b) scroll is smooth.** One-line revert if open-flicker returns
   (re-add the descendant selectors).
 
+## Phase 5 features (2026-06-30) — edit-snipe, ghost-ping, hover-prefetch
+
+- **MessageStore access:** `findByPropsAll("getMessage","getMessages")`. `getMessage(channelId, id)`
+  returns the live Message record (`.content`, `.mentions` [array of user objects], `.mentioned`).
+  Confirmed on 9243 (`health … msgStore=ok`).
+- **Edit-snipe:** interceptor handles `MESSAGE_UPDATE` (`{type, message:{id, channel_id, content, …}}`),
+  reads the OLD message from the store BEFORE the update applies (interceptor runs pre-dispatch), and
+  records `{from,to}` in `editHistory` (Map, cap 300). Returns `false` — never blocks the edit. Skips
+  embed-only updates (old===new content). Query: `DCMod.editSnipe(id)`.
+- **Ghost-ping:** on a blocked `MESSAGE_DELETE`, `_isGhostPing` reads the message from the store and
+  checks `mentions.some(u=>u.id===selfId)` / `mentioned===true` against `UserStore.getCurrentUser().id`.
+  Hits get `ghostPings.add(id)` + a NON-debug `GHOST PING preserved` log + a distinct **orange** row
+  style (`.dcmod-ghostping-row`, `#faa61a`) layered over the red. Query: `DCMod.ghostPings()`.
+- **Hover-prefetch:** `findByPropsAll("fetchMessages")` → `MF.fetchMessages({channelId, limit:50})`.
+  **Signature `{channelId, limit}` CONFIRMED on 9243** — fired live with no error (`prefetch channel=…`,
+  no `prefetch failed`). Capture-phase `mouseover` on document; resolve channelId from the closest
+  `a[href*="/channels/"]`; 150ms hover-intent debounce; dedupe per channel 30s; skip the open channel;
+  all in try/catch (a wrong signature would be a silent no-op, not a crash). Toggle `DCMod.prefetch`.
+  Idle self-overhead unchanged (still `intN=0 obsN=0`) — the mouseover handler early-outs on non-link
+  targets and only fires on real hover intent.
+- **Deferred (NOT built — reasons):** MessageStore-retention-across-nav (risk: stale data / memory if we
+  fight Discord's eviction), GIF-favorites cache (complexity), spellchecker-off (needs user consent — it
+  loses red-underline spellcheck), offscreen-autoplay-throttle (risk of breaking GIF/video playback).
+  See `ROADMAP.md` Phase 5.
+
 ## Unit tests (2026-06-30)
 
 `test/pure.test.js` (`node --test` / `npm test`): telemetry regex (blocks telemetry, allows functional
@@ -398,6 +423,12 @@ bulk-delete mixed-batch trim. Each regex test asserts the renderer.js source sti
 
 ## Changelog (append one line per session)
 
+- 2026-06-30 (Phase 5): **edit-snipe** (capture pre-edit content on MESSAGE_UPDATE → `DCMod.editSnipe`),
+  **ghost-ping snipe** (deleted messages that @mention you → orange style + `DCMod.ghostPings`),
+  **hover-prefetch** (warm channel messages on 150ms hover intent → instant open; `fetchMessages({channelId,
+  limit})` signature confirmed live on 9243, fired with no error; `DCMod.prefetch`). Health line extended
+  with `msgStore` + `prefetch`. Idle overhead held at 0. Deferred retention/GIF-cache/spellchecker/autoplay
+  (reasons above). Committed.
 - 2026-06-30: **Updated 9240→9243** (unfreeze→launch→install→freeze; internals unchanged, verified
   clean boot). **Bugfixes:** mixed MESSAGE_DELETE_BULK data-loss (trim action.ids to allow-listed subset
   instead of passing whole batch → preserved messages no longer wiped); removed dead+dangerous

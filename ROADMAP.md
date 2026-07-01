@@ -25,7 +25,12 @@ window-control fix. See `PROGRESS.md`.
 - **Phase 3 — DONE (in-file, single-IIFE).** Settings persist (localStorage); constants already named
   consts. (Multi-file split dropped — see below.)
 - **Phase 4 — DONE.** Health line + safe source-fallback locator + `test/pure.test.js` (6/6).
-- **Phase 5 — TODO.** Feature roadmap (hover-prefetch, store retention, edit-snipe, …) — unstarted.
+- **Phase 5 — PARTIAL.** Built + verified: **edit-snipe** (`DCMod.editSnipe`), **ghost-ping snipe**
+  (orange style, `DCMod.ghostPings`), **hover-prefetch** (`DCMod.prefetch` — fired live on 9243, fetch
+  signature confirmed, 0 errors). Deferred (reasons): MessageStore-retention (stale/memory risk),
+  GIF-favorites cache (complexity), spellchecker-off (needs consent — loses red-underline),
+  offscreen-autoplay-throttle (playback risk). Extend-telemetry-blocklist skipped (needs live observation
+  first — blind additions risk dropping functional dispatches).
 
 Idle self-overhead held at **0** across every restart (see the benchmark discipline: `intN/obsN/intMs/obsMs`
 stay 0 in every `perf baseline`). Snipe/telemetry/copy-avatar/winctl all report `ok` on the boot health line.
