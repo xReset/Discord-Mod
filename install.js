@@ -138,7 +138,15 @@ Module._load = function (request, parent, isMain) {
         try {
           if (options && options.webPreferences) {
             if (options.webPreferences.preload) {
-              process.env.DCMOD_ORIGINAL_PRELOAD = options.webPreferences.preload;
+              const _origPreload = options.webPreferences.preload;
+              // Pass the original preload path PER-WINDOW via additionalArguments (arrives in
+              // that preload process's process.argv). A single process.env slot is a race: a
+              // second window created before the first's preload runs would clobber it. env is
+              // kept only as a fallback for the (normal) single-window case.
+              options.webPreferences.additionalArguments = (options.webPreferences.additionalArguments || []).concat(
+                "--dcmod-original-preload=" + _origPreload
+              );
+              process.env.DCMOD_ORIGINAL_PRELOAD = _origPreload;
               options.webPreferences.preload = PRELOAD;
             }
             // Re-enable DevTools (Discord Stable forces this off).
@@ -229,9 +237,15 @@ try {
 }
 
 // 1) Run Discord's real preload so DiscordNative / window APIs exist.
+//    Prefer the per-window arg (race-free); fall back to the env var.
 try {
-  if (process.env.DCMOD_ORIGINAL_PRELOAD) {
-    require(process.env.DCMOD_ORIGINAL_PRELOAD);
+  let origPreload = process.env.DCMOD_ORIGINAL_PRELOAD;
+  try {
+    const arg = (process.argv || []).find(function (a) { return a.indexOf("--dcmod-original-preload=") === 0; });
+    if (arg) origPreload = arg.slice("--dcmod-original-preload=".length);
+  } catch (e) {}
+  if (origPreload) {
+    require(origPreload);
   }
 } catch (e) {
   console.error("[DCMod] failed to chain original preload:", e);

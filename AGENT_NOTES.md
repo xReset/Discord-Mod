@@ -15,7 +15,9 @@
 > 4. This is the **scratch/quirks log**. `DiscordMod.md` = overview, `PROGRESS.md` = build status.
 >    Put durable internals knowledge here.
 
-**Current Discord build observed:** `app-1.0.9240` (Stable, Win11). Auto-update is FROZEN — see below.
+**Current Discord build observed:** `app-1.0.9243` (Stable, Win11). Auto-update is FROZEN — see below.
+Updated 9240→9243 on 2026-06-30; internals UNCHANGED (dispatcher score=21 real instance, addInterceptor
+present, all hooks + DOM ids identical). The 9239 internals notes below still hold on 9243.
 
 ---
 
@@ -362,8 +364,50 @@ removed). Next roadmap (highest felt-impact first): hover-prefetch DMs/channels,
 across navigation, GIF-favorites cache, spellchecker-off (main-process), edit-snipe / ghost-ping snipe.
 Full notes in `PLAN.md`.
 
+## Health line + resilience (2026-06-30)
+
+- **Boot health line** (renderer `boot()`): one grep target after any Discord update —
+  `health dispatcher=ok interceptor=addInterceptor deleteHook=ok telemetry=ok ctxMenu=ok avatarMenu=ok winctl=ok settings={...}`.
+  Any `=FAIL` / `deleteHook=miss` = that subsystem's internals moved; the rest still works. Check it FIRST.
+- **Safe source-fallback locator** (`findDispatcherBySource`): if the live-cache prop-scan finds no flux
+  candidate, scan `wreq.m[id].toString()` for minify-stable strings
+  (`"Dispatch.dispatch(...) called without an action type"`, `"_dispatchWithDevtools"`) and execute ONLY
+  that ONE matched module. This is NOT the banned mass force-execution (which ran ALL ~3100 factories out
+  of order) — it's a single targeted require of the dispatcher's self-contained factory. Logs
+  `dispatcher found via SOURCE fallback` when it triggers (a signal internals shifted).
+- **DEBUG flag** (persisted, default OFF): gates the chatty dev logs — the per-delete `action type=…`
+  dump, the 5-min `perf interval` sampler, and the per-eviction `removeLocal` line. A normal multi-hour
+  session now stays quiet (the log was accruing a `removeLocal` line every few seconds from retention-cap
+  eviction across many servers). `DCMod.debug(true)` to re-enable; the one-shot `perf baseline` stays on.
+- **Settings persistence** (`localStorage` key `dcmod:settings`): `noTrack`/`fastUI`/`enabled`/`debug`
+  survive restarts. Toggles write on change; boot reads them (defaults preserved if absent).
+- **Picker scroll-jank fix:** the fastUI open-flicker exception was `[class*=expressionPicker] *`
+  (EVERY descendant) → the .15s opacity fade also hit the VIRTUALIZED grid rows, which mount/unmount on
+  scroll → ghosting/jank on fast scroll of favorited GIFs/stickers/emoji. Scoped it to
+  `[class*="expressionPicker"]` (container only): the open-fade (on the container) is kept, scrolled-in
+  rows are instant. Still OPACITY-ONLY (never transform/all). **Needs an eyeball to confirm BOTH: (a)
+  picker still opens with no flicker, (b) scroll is smooth.** One-line revert if open-flicker returns
+  (re-add the descendant selectors).
+
+## Unit tests (2026-06-30)
+
+`test/pure.test.js` (`node --test` / `npm test`): telemetry regex (blocks telemetry, allows functional
+API), avatar-src parsing, row-id regex, default-avatar index, retention/allow-list eviction bound,
+bulk-delete mixed-batch trim. Each regex test asserts the renderer.js source still contains the literal
+(drift guard). 6/6 pass. These are the pure bits that silently rot on updates.
+
 ## Changelog (append one line per session)
 
+- 2026-06-30: **Updated 9240→9243** (unfreeze→launch→install→freeze; internals unchanged, verified
+  clean boot). **Bugfixes:** mixed MESSAGE_DELETE_BULK data-loss (trim action.ids to allow-listed subset
+  instead of passing whole batch → preserved messages no longer wiped); removed dead+dangerous
+  `findModuleBySource` (force-executed factories — the banned pattern) and dead `exportCandidates`;
+  bounded `allowDelete` (leak guard, cap 200); per-window preload path via `additionalArguments` (was a
+  single `process.env` slot = multi-window race). **Maintainability:** settings persistence (localStorage),
+  DEBUG-gated dev logs (quiet sessions), in-file (kept single-IIFE per WORKFLOW). **Resilience:** boot
+  health line, safe source-fallback dispatcher locator. **Fix:** picker scroll-jank (fastUI fade scoped
+  to picker container, off the virtualized grid rows). **Tests:** `test/pure.test.js`, 6/6. All verified
+  via log (dispatcher/hooks/health clean, 0 errors, idle overhead still 0). See ROADMAP.md for the plan.
 - 2026-05-30: Created this file. Rewrote dispatcher discovery (deep export scan + brute-execute all
   factories), swapped addInterceptor→dispatch-wrap, added hover-✕ local removal, fixed log-noise filter,
   fixed per-key getter try/catch. Restart-loop iteration confirmed; hot-reload confirmed dead.

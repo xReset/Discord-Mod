@@ -26,6 +26,29 @@
   log("renderer injected ✓ — booting");
 
   // ---------------------------------------------------------------------------
+  // Persisted settings — survive restarts via the page's localStorage. Toggles
+  // (DCMod.noTrack/fastUI/toggleDeleted/debug) write here so a choice sticks
+  // instead of resetting to the default every launch.
+  // ---------------------------------------------------------------------------
+  const _SETTINGS_KEY = "dcmod:settings";
+  const _settings = (function () {
+    const defaults = { noTrack: true, fastUI: true, enabled: true, debug: false };
+    try {
+      const raw = localStorage.getItem(_SETTINGS_KEY);
+      if (raw) return Object.assign(defaults, JSON.parse(raw));
+    } catch (e) {}
+    return defaults;
+  })();
+  function _saveSettings() {
+    try {
+      localStorage.setItem(_SETTINGS_KEY, JSON.stringify(_settings));
+    } catch (e) {}
+  }
+  // DEBUG gates the chatty dev-only logs (per-delete dump, 5-min perf sampler,
+  // per-eviction removeLocal line) so a normal multi-hour session stays quiet.
+  let DEBUG = !!_settings.debug;
+
+  // ---------------------------------------------------------------------------
   // Telemetry blocker — drop Discord's analytics/metrics/crash-reporting at the
   // network layer. Installed immediately (these globals exist before webpack
   // boots) so we catch early beacons too. Pairs with the TRACK interceptor block.
@@ -101,7 +124,7 @@
   let _hookMode = "";
   let _hooksActive = true; // A/B switch for benchmarking (DCMod.setActive)
   let _measuring = false; // when false, interceptor/observer skip perf timing (zero overhead)
-  let _noTrack = true; // block Discord analytics/telemetry (TRACK dispatches + network)
+  let _noTrack = _settings.noTrack; // block Discord analytics/telemetry (TRACK dispatches + network)
   let _telBlocked = 0; // count of telemetry requests/events we dropped
 
   // ---------------------------------------------------------------------------
@@ -311,47 +334,6 @@
     return findModule(wreq, (m) => props.every((p) => m[p] !== undefined));
   }
 
-  // Search wreq.m factory source strings — handles webpack 5 where most modules
-  // are registered but not yet executed (so wreq.c only has ~100 of 2000+ modules).
-  function findModuleBySource(wreq, ...keywords) {
-    if (!wreq.m) return null;
-    for (const id in wreq.m) {
-      try {
-        const src = wreq.m[id].toString();
-        if (!keywords.every((kw) => src.includes(kw))) continue;
-        // Execute the module so it lands in wreq.c and returns its exports.
-        const mod = wreq(id);
-        if (mod) return mod;
-      } catch (e) {}
-    }
-    return null;
-  }
-
-  // Modern Discord nests the FluxDispatcher INSTANCE under an export property
-  // (e.g. exports.Z / exports.ZP / exports.default), and minifies method names.
-  // So we scan each module's exports AND its one-level-deep property values.
-  function exportCandidates(mod) {
-    const out = [];
-    if (!mod) return out;
-    out.push(mod);
-    let keys = [];
-    try {
-      keys = Object.keys(mod);
-    } catch (e) {
-      return out;
-    }
-    for (const k of keys) {
-      let v;
-      try {
-        v = mod[k]; // Discord getters can throw — isolate each one.
-      } catch (e) {
-        continue;
-      }
-      if (v && (typeof v === "object" || typeof v === "function")) out.push(v);
-    }
-    return out;
-  }
-
   // Vencord-proven: the FluxDispatcher *instance* exposes runtime props `dispatch`
   // and `subscribe` (public flux API — these survive minification). Internals like
   // `_actionHandlers`/`_subscriptions`/`addInterceptor` also survive. We must scan
@@ -406,6 +388,46 @@
     }
   }
 
+  // SAFE fallback locator. If the live-cache prop-scan finds nothing (e.g. a Discord
+  // update moved the dispatcher and it isn't naturally executed yet), find the
+  // FluxDispatcher module by a minify-stable SOURCE string and execute ONLY that one
+  // module. This is NOT the banned mass force-execution (that ran ALL ~3100 factories
+  // out of dependency order and corrupted modules) — it's a single targeted require of
+  // the dispatcher's own factory, which is self-contained. Locators from AGENT_NOTES.
+  const _DISPATCHER_SRC = ["Dispatch.dispatch(...) called without an action type", "_dispatchWithDevtools"];
+  function findDispatcherBySource() {
+    for (const r of allRequires()) {
+      if (!r.m) continue;
+      for (const id in r.m) {
+        let src;
+        try {
+          src = r.m[id].toString();
+        } catch (e) {
+          continue;
+        }
+        if (!_DISPATCHER_SRC.some((s) => src.includes(s))) continue;
+        try {
+          const ex = r(id); // single targeted execution — safe (self-contained module)
+          const cands = [];
+          if (ex) {
+            if (isFlux(ex)) cands.push(ex);
+            if (typeof ex === "object") for (const k in ex) {
+              try {
+                if (isFlux(ex[k])) cands.push(ex[k]);
+              } catch (e) {}
+            }
+          }
+          if (cands.length) {
+            cands.sort((a, b) => fluxScore(b) - fluxScore(a));
+            log("dispatcher found via SOURCE fallback (prop-scan missed) — Discord internals may have shifted");
+            return cands[0];
+          }
+        } catch (e) {}
+      }
+    }
+    return null;
+  }
+
   function findDispatcher(wreq) {
     const reqs = allRequires();
     if (wreq && wreq.c && !reqs.includes(wreq)) reqs.push(wreq);
@@ -417,7 +439,7 @@
       } catch (e) {}
       collectFlux(r.c || {}, candidates);
     }
-    if (!candidates.length) return null;
+    if (!candidates.length) return findDispatcherBySource(); // prop-scan missed → safe source fallback
     // Pick the highest-scoring (real instance with internal fields).
     candidates.sort((a, b) => fluxScore(b) - fluxScore(a));
     if (!_loggedCandidates) {
@@ -464,7 +486,7 @@
   // indicators keep working. Net effect: clicks resolve with no artificial delay
   // AND fewer composited frames (less GPU). Toggle: DCMod.fastUI(bool).
   // ---------------------------------------------------------------------------
-  let _fastUI = true;
+  let _fastUI = _settings.fastUI;
   function injectSpeedStyle() {
     let el = document.getElementById("dcmod-speed-style");
     if (!el) {
@@ -480,11 +502,15 @@
          /* The emoji/sticker/gif picker lazily renders its grid; Discord fades
             content in to mask the pop. The * rule above collapses that fade to
             ~0, so the grid visibly flickers on open. Restore a real opacity fade
-            here (higher specificity → wins). OPACITY ONLY — never transform/all,
-            so the virtualized scroller's position changes don't animate (that
-            would lag/jitter the scroll). Outer UI still gets instant transitions. */
-         [class*="expressionPicker"], [class*="expressionPicker"] *,
-         [class*="expressionPicker"] *::before, [class*="expressionPicker"] *::after {
+            — but ONLY on the picker CONTAINER elements, NOT every descendant.
+            Previously this covered every descendant, which put a
+            0.15s opacity fade on the VIRTUALIZED grid rows too: as you scroll,
+            rows mount/unmount continuously and each one faded in → ghosting /
+            jank on fast scroll (favorited GIFs, stickers, emoji). Scoping to the
+            container keeps the open-fade (the container is what fades in) while
+            leaving scrolled-in rows instant. OPACITY ONLY — never transform/all,
+            so virtualized row repositioning never animates (that jitters scroll). */
+         [class*="expressionPicker"] {
            transition-property: opacity !important;
            transition-duration: 0.15s !important;
            transition-delay: 0s !important;
@@ -497,7 +523,7 @@
   // ---------------------------------------------------------------------------
   const deletedIds = new Set();
   const deletedActions = new Map(); // id -> original MESSAGE_DELETE action (for replay)
-  let enabled = true;
+  let enabled = _settings.enabled;
   let _dispatcher = null;
 
   // Locate the text node AND the message row for a message id. Gif/embed-only
@@ -584,7 +610,7 @@
     const action = deletedActions.get(id) || { type: "MESSAGE_DELETE", id: id, channelId: _channelOf(row) };
     deletedActions.delete(id);
     stopObserverIfIdle();
-    log("removeLocal id=" + id + " hasAction=" + !!action + " hasDispatcher=" + !!_dispatcher + " chan=" + action.channelId);
+    if (DEBUG) log("removeLocal id=" + id + " hasAction=" + !!action + " hasDispatcher=" + !!_dispatcher + " chan=" + action.channelId);
     let removed = false;
     try {
       if (_dispatcher && action && action.channelId) {
@@ -637,7 +663,13 @@
       const orig = MA.deleteMessage;
       MA.deleteMessage = function (channelId, messageId) {
         try {
-          if (messageId != null) allowDelete.add(String(messageId));
+          if (messageId != null) {
+            allowDelete.add(String(messageId));
+            // Bound the Set: ids are normally consumed when the matching MESSAGE_DELETE
+            // dispatches, but a delete that fails/never dispatches would leak its id forever.
+            // Evict oldest (insertion-ordered) so a failure path can't grow unbounded.
+            while (allowDelete.size > ALLOW_DELETE_CAP) allowDelete.delete(allowDelete.values().next().value);
+          }
         } catch (e) {}
         return orig.apply(this, arguments);
       };
@@ -650,6 +682,7 @@
 
   // ids the user chose to actually remove locally (let the delete through).
   const allowDelete = new Set();
+  const ALLOW_DELETE_CAP = 200; // bound the allow-list; normally consumed on dispatch (see hook)
 
   function installDispatcherHook(wreq) {
     const Dispatcher = findDispatcher(wreq);
@@ -683,7 +716,7 @@
       let result = false;
       try {
         {
-          if (_msgActionLog < 80) {
+          if (DEBUG && _msgActionLog < 80) {
             _msgActionLog++;
             log("action type=" + type + " keys=[" + Object.keys(action).slice(0, 12).join(",") + "]");
           }
@@ -699,7 +732,17 @@
               const block = action.ids.filter((x) => !allowDelete.has(x));
               action.ids.forEach((x) => allowDelete.delete(x)); // consume any allowed ids
               block.forEach((x) => markDeleted(x, { type: "MESSAGE_DELETE", id: x, channelId: action.channelId, guildId: action.guildId }));
-              if (block.length === action.ids.length) result = true; // block all
+              if (block.length === action.ids.length) {
+                result = true; // nothing allow-listed → block the whole bulk delete (all stay red)
+              } else if (block.length > 0) {
+                // MIXED: some ids are yours (allow-listed), some are others'. Passing the
+                // original action through would delete the whole batch — wiping the ones we
+                // just markDeleted. Trim the action IN PLACE to only the allow-listed ids so
+                // Discord removes just those; the blocked (others') ids stay preserved red.
+                const blockSet = new Set(block);
+                action.ids = action.ids.filter((x) => !blockSet.has(x));
+              }
+              // block.length === 0 → all allow-listed → pass through unchanged (all vanish)
             }
           }
         }
@@ -1099,21 +1142,36 @@
   window.DCMod = {
     toggleDeleted() {
       enabled = !enabled;
+      _settings.enabled = enabled;
+      _saveSettings();
       log("deleted-message viewer:", enabled ? "ON" : "OFF");
       return enabled;
     },
     // Telemetry blocking: on by default. Returns current count of dropped events.
     noTrack(on) {
       if (on !== undefined) _noTrack = !!on;
+      _settings.noTrack = _noTrack;
+      _saveSettings();
       log("telemetry blocking " + (_noTrack ? "ON" : "OFF") + " — blocked so far: " + _telBlocked);
       return { enabled: _noTrack, blocked: _telBlocked };
     },
     // Collapse UI transition latency. Default ON. DCMod.fastUI(false) restores vanilla feel.
     fastUI(on) {
       if (on !== undefined) _fastUI = !!on;
+      _settings.fastUI = _fastUI;
+      _saveSettings();
       injectSpeedStyle();
       log("fast UI (instant transitions) " + (_fastUI ? "ON" : "OFF"));
       return _fastUI;
+    },
+    // Toggle chatty dev logs (per-delete dump, 5-min perf sampler, eviction lines).
+    // Persisted; takes full effect on next restart for the perf sampler.
+    debug(on) {
+      if (on !== undefined) DEBUG = !!on;
+      _settings.debug = DEBUG;
+      _saveSettings();
+      log("debug logging " + (DEBUG ? "ON" : "OFF") + " (restart to (de)activate the 5-min perf sampler)");
+      return DEBUG;
     },
     clearDeleted() {
       document.querySelectorAll(".dcmod-deleted").forEach((el) => el.classList.remove("dcmod-deleted"));
@@ -1256,9 +1314,22 @@
     installContextMenu();
     installAvatarMenu();
     installWindowControls();
-    hookOutgoingDeletes();
+    const _delOk = hookOutgoingDeletes();
     restoreM(); // dispatcher captured — stop taxing every Function .m read
     log("ready ✓  (toggle with DCMod.toggleDeleted())");
+    // Structured health line — ONE grep target after a Discord update. Any `=FAIL`
+    // (or deleteHook=miss) is the first thing to check; the rest of the client works
+    // but that subsystem's internals moved. Cheap, one line, huge triage win.
+    log(
+      "health dispatcher=" + (_dispatcher ? "ok" : "FAIL") +
+      " interceptor=" + (_hookMode || "FAIL") +
+      " deleteHook=" + (_delOk ? "ok" : "miss") +
+      " telemetry=" + (window.__DCMOD_NOTRACK__ ? "ok" : "FAIL") +
+      " ctxMenu=" + (window.__DCMOD_CTX_INSTALLED__ ? "ok" : "FAIL") +
+      " avatarMenu=" + (window.__DCMOD_AVATAR__ ? "ok" : "FAIL") +
+      " winctl=" + (window.__DCMOD_WINCTL__ ? "ok" : "skip") +
+      " settings=" + JSON.stringify(_settings)
+    );
     diag(); // auto-dump state so the log file is self-sufficient
     // Passive baseline: measure our idle overhead for 30s, dump once.
     perfReset();
@@ -1267,11 +1338,15 @@
       // Long-session sampling: per-interval delta every 5min so main-thread
       // drift is visible across a multi-hour session. Reset each tick.
       perfReset();
-      if (_perfInterval) clearInterval(_perfInterval);
-      _perfInterval = setInterval(() => {
-        log("perf interval " + JSON.stringify(perfSnapshot()) + " noTrack=" + _noTrack + " telBlocked=" + _telBlocked);
-        perfReset();
-      }, _PERF_INTERVAL_MS);
+      // Long-session sampling is DEBUG-only: without it a normal multi-hour session
+      // doesn't accrue a log line every 5 min. Flip DCMod.debug(true) to sample.
+      if (DEBUG) {
+        if (_perfInterval) clearInterval(_perfInterval);
+        _perfInterval = setInterval(() => {
+          log("perf interval " + JSON.stringify(perfSnapshot()) + " noTrack=" + _noTrack + " telBlocked=" + _telBlocked);
+          perfReset();
+        }, _PERF_INTERVAL_MS);
+      }
     }, 30000);
   }
 

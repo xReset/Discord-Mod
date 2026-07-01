@@ -3,10 +3,12 @@
 **Location (code):** `E:\DiscordMod`
 **Target:** Discord **Stable**, Windows 11
 **Stack:** JavaScript / Electron (NOT Python — fully separate from the `E:\Selfbot` Python selfbot)
-**Status (2026-05-30):** snipe (deleted viewer), telemetry blocking, fast-UI, and a Copy-Avatar
-context-menu item all working. The DC launcher/panel UI and text transforms were **removed**.
-Direction: a client strictly faster/lighter than vanilla + QOL. Next: hover-prefetch, message-store
-retention, GIF-favorites cache (see `PLAN.md`).
+**Status (2026-06-30):** on **build 1.0.9243** (updated from 9240; internals unchanged). Working:
+snipe (deleted viewer), telemetry blocking, fast-UI, Copy-Avatar, window-control fix. This session:
+correctness bugfixes, settings persistence, DEBUG-gated logs, boot health line, safe source-fallback
+dispatcher locator, picker scroll-jank fix, unit tests (`npm test`). The DC launcher/panel UI and text
+transforms remain **removed**. Direction: a client strictly faster/lighter than vanilla + QOL. Roadmap
+(`ROADMAP.md`) → hover-prefetch, message-store retention, GIF-favorites cache, edit-snipe.
 
 ---
 
@@ -123,7 +125,7 @@ Relaunch Discord → `Ctrl+Shift+I` → Console should show:
 Edit `src/renderer/renderer.js`, then **fully restart Discord**. No re-install — preload reads the
 file fresh each launch.
 
-### Auto-update is frozen (build 1.0.9240)
+### Auto-update is frozen (build 1.0.9243)
 Discord's Squirrel updater installs each update as a new `app-<version>` folder and deletes the old
 one, wiping the patched `app.asar` (this is why the mod "disappeared" after `9239→9240` on
 2026-06-03). `tools/freeze-version.ps1` denies the user the create-folder right on

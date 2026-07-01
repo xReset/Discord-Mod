@@ -5,7 +5,9 @@
   "private": true,
   "scripts": {
     "install-mod": "node install.js",
-    "uninstall-mod": "node uninstall.js"
+    "uninstall-mod": "node uninstall.js",
+    "test": "node --test",
+    "check": "node --check src/renderer/renderer.js && node --check install.js && node --check uninstall.js"
   },
   "devDependencies": {
     "@electron/asar": "^3.2.10"

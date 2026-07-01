@@ -1,7 +1,10 @@
 # DiscordMod — Plan & Roadmap (next agent starts here)
 
-Updated 2026-05-30. Read alongside `AGENT_NOTES.md` (internals). This file is the **authoritative
-next-build plan**.
+> **2026-06-30: `ROADMAP.md` is now the authoritative long-term plan** (phased, with done-checks and
+> current status). This file is kept for its Tier-1/2/3 feature detail + undocumented-hooks notes, which
+> `ROADMAP.md` Phase 5 references. For *what to build next* and *what's already done*, read `ROADMAP.md`.
+
+Updated 2026-05-30. Read alongside `AGENT_NOTES.md` (internals).
 
 > **Direction:** make our Discord client **strictly better than vanilla** — faster, lighter, no
 > telemetry — plus QOL features (snipe, copy-avatar, …). Optimizations must not cost system

@@ -2,11 +2,36 @@
 
 **Last updated:** 2026-06-10
 **Current status:** ✅ Snipe (deleted viewer), ✅ telemetry blocking, ✅ fast-UI, ✅ Copy-Avatar
-context-menu item, ✅ window-control fix (min/maximize) all working on **build 1.0.9240**. Auto-update **frozen** (icacls deny-folder on
+context-menu item, ✅ window-control fix (min/maximize) all working on **build 1.0.9243**. Auto-update **frozen** (icacls deny-folder on
 `%LOCALAPPDATA%\Discord`) so updates can't wipe the mod. The old DC launcher/panel UI and the
 text-transform feature were **removed** (dead weight). Direction now: a client strictly
 faster/lighter than vanilla + QOL. Next roadmap: hover-prefetch DMs/channels, message-store
 retention, GIF-favorites cache, edit-snipe.
+
+## 2026-06-30 — update to 9243 + bugfix/hardening/test pass
+
+- **Updated 9240→9243** (unfreeze→launch→install.js→freeze). Internals unchanged — dispatcher found as
+  the real instance (score 21, `addInterceptor` present), all hooks + DOM ids identical. Clean boot,
+  0 errors. Verified end-to-end via `logs/discord-console.log`.
+- **Correctness bugfixes:**
+  - Mixed `MESSAGE_DELETE_BULK` data loss — a batch containing *some* of your own deletes used to pass
+    the whole action through (wiping the others' messages we'd preserved). Now trims `action.ids` to
+    only the allow-listed subset; others' ids stay red.
+  - Removed dead + dangerous `findModuleBySource` (it force-executed factories — the explicitly banned
+    pattern) and unused `exportCandidates`.
+  - Bounded `allowDelete` (cap 200, oldest-evict) so a failed/never-dispatched delete can't leak ids.
+  - Per-window original-preload path via `additionalArguments` (was one `process.env` slot = multi-window race).
+- **Maintainability (kept single-IIFE per WORKFLOW rule 2):** settings persist to `localStorage`
+  (`noTrack`/`fastUI`/`enabled`/`debug`); DEBUG flag (default off) gates the chatty dev logs so a normal
+  session is quiet (was accruing a `removeLocal` line every few seconds from retention-cap eviction).
+- **Resilience:** boot **health line** (`health dispatcher=ok interceptor=… deleteHook=ok …`) = one grep
+  target after an update; **safe source-fallback** dispatcher locator (single targeted require, not mass
+  force-execution) for when the prop-scan misses.
+- **Picker scroll-jank fix:** fastUI's open-flicker opacity fade was applied to every picker descendant,
+  fading virtualized grid rows during scroll → jank on favorited GIFs/stickers/emoji. Scoped to the
+  picker container. *(Needs an eyeball to confirm no open-flicker + smooth scroll.)*
+- **Tests:** `test/pure.test.js` (`npm test`) — 6/6 (telemetry regex, avatar parsing, id regex,
+  default-avatar index, eviction bound, bulk-delete trim).
 
 ## 2026-06-10 — window-control (min/maximize) fix
 
