@@ -156,9 +156,16 @@ Module._load = function (request, parent, isMain) {
         super(options);
         try {
           // Bind Ctrl+Shift+I ourselves so it works regardless of Discord's menu.
+          // Open DevTools DETACHED — docked DevTools share the BrowserWindow and
+          // Chromium enforces a combined minimum width, so Discord can't shrink
+          // horizontally as far as expected while the console is open.
           this.webContents.on("before-input-event", (event, input) => {
             if (input.control && input.shift && (input.key === "I" || input.key === "i")) {
-              this.webContents.toggleDevTools();
+              if (this.webContents.isDevToolsOpened()) {
+                this.webContents.closeDevTools();
+              } else {
+                this.webContents.openDevTools({ mode: "detach" });
+              }
             }
           });
           // Mirror renderer console -> log file (handles old + new Electron signatures).
