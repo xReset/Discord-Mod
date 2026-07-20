@@ -30,7 +30,11 @@ present, all hooks + DOM ids identical). The 9239 internals notes below still ho
   via `& "$env:LOCALAPPDATA\Discord\Update.exe" --processStart Discord.exe`. So far no logout this run.
 - **DevTools:** Discord Stable forces `webPreferences.devTools=false` and wipes the `settings.json`
   flag on exit. We force `devTools=true` in the shim's `PatchedBrowserWindow` ctor. Don't bother with
-  settings.json.
+  settings.json. **Open detached** (`openDevTools({ mode: "detach" })` on Ctrl+Shift+I): docked DevTools
+  share the BrowserWindow and Chromium applies minimum-width to the *outer* frame, so Discord can't shrink
+  horizontally as far while the console is open. Detached DevTools live in their own window → no layout tax.
+  If DevTools was already docked from an older shim, close it once and reopen (or undock via the DevTools
+  ⋮ menu) to pick up detached mode.
 - **CSP blocks inline `<script>`** (`Refused to execute inline script…`). Inject via
   `webFrame.executeJavaScript` from the preload (runs in main world, bypasses CSP).
 
