@@ -16,6 +16,8 @@ Features today:
 - **Window-control fix** — on this frozen build Discord's own titlebar **minimize / maximize / close**
   buttons are dead (its renderer→main IPC for window controls no-ops). We route those clicks through
   our own bridge (preload `ipcRenderer` → shim `ipcMain` → `win.minimize()/maximize()/close()`) so they work.
+- **Disable min size** — Discord Stable locks the main window at **940×500**. We zero constructor
+  mins and no-op `setMinimumSize` so you can resize as small as the OS allows.
 
 This is fully our own injector (not Vencord/BetterDiscord). It loads the original Discord app
 untouched and adds a chained preload that injects our renderer script.

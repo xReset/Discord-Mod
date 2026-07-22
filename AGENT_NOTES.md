@@ -208,6 +208,17 @@ Real action shapes (build 1.0.9239):
   `navigator.clipboard.write([new ClipboardItem({"image/png": blob})])`. Runs in the click gesture → allowed.
   Canvas-convert as a fallback if a non-png ever comes back.
 
+## Window minimum size (2026-07-22)
+
+- **Not DevTools.** Vanilla Discord (`discord_desktop_core` `core.asar`) sets
+  `MIN_WIDTH=settings.get("MIN_WIDTH",940)`, `MIN_HEIGHT=…500`, passes them as BrowserWindow
+  `minWidth`/`minHeight`, and clamps saved `WINDOW_BOUNDS`. Webapp can also call
+  `WINDOW_SET_MINIMUM_SIZE` → `win.setMinimumSize`.
+- **Fix in shim `PatchedBrowserWindow`:** set `options.minWidth/minHeight=0` before `super`, call
+  `RealBW.prototype.setMinimumSize(0,0)`, then replace `this.setMinimumSize` with a no-op.
+  Settings.json alone is unreliable on current Stable (Vencord/BD same conclusion).
+- Electron frameless OS floor (~39px @ 100% DPI) remains; that is far below Discord's old 940.
+
 ## Window-control (min/maximize) fix — build 1.0.9240 (2026-06-10)
 
 - **Symptom:** titlebar minimize/maximize buttons do nothing.
@@ -490,3 +501,5 @@ bulk-delete mixed-batch trim. Each regex test asserts the renderer.js source sti
 - 2026-07-22: **Build stamp** (`DCModNative.patchedBuild` + health `build=` + `build changed` warn) and
   install/uninstall refuse while Discord.exe is running. Live install observed at **1.0.9248**.
 - 2026-07-22: Expanded pure tests + doc hygiene (WORKFLOW/AGENT_NOTES/MAINTENANCE_PLAN Phase D).
+- 2026-07-22: **Disable min size** — Discord core defaults 940×500; shim zeros ctor mins + no-ops
+  `setMinimumSize` (webapp IPC can't restore). DevTools was a red herring for the resize floor.
