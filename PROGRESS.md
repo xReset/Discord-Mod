@@ -1,12 +1,19 @@
 # DiscordMod — Build Progress
 
-**Last updated:** 2026-06-10
+**Last updated:** 2026-07-22
 **Current status:** ✅ Snipe (deleted viewer), ✅ telemetry blocking, ✅ fast-UI, ✅ Copy-Avatar
-context-menu item, ✅ window-control fix (min/maximize) all working on **build 1.0.9243**. Auto-update **frozen** (icacls deny-folder on
-`%LOCALAPPDATA%\Discord`) so updates can't wipe the mod. The old DC launcher/panel UI and the
-text-transform feature were **removed** (dead weight). Direction now: a client strictly
-faster/lighter than vanilla + QOL. Next roadmap: hover-prefetch DMs/channels, message-store
-retention, GIF-favorites cache, edit-snipe.
+context-menu item, ✅ window-control fix (min/maximize/**close**) all working on **build 1.0.9243**.
+Auto-update **frozen** (icacls deny-folder on `%LOCALAPPDATA%\Discord`) so updates can't wipe the mod.
+DevTools left off (Stable default) to preserve small minimize sizes. Active queue: `MAINTENANCE_PLAN.md`.
+
+## 2026-07-22 — DevTools off + titlebar close bridged
+
+- **DevTools:** stopped forcing `webPreferences.devTools=true` and removed Ctrl+Shift+I →
+  `toggleDevTools()`. Docked Chromium DevTools raise the practical min window size; verify boots via
+  `logs/discord-console.log`.
+- **Close button:** same dead DiscordNative window IPC as min/maximize — wired `aria-label=close` →
+  `DCModNative.close()` → `win.close()`. Shim already had the IPC action; renderer was skipping it.
+- Re-run `node install.js` after pulling (shim change). Fully quit Discord first.
 
 ## 2026-06-30 — Phase 5 features (edit-snipe, ghost-ping, hover-prefetch)
 

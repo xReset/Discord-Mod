@@ -28,9 +28,9 @@ present, all hooks + DOM ids identical). The 9239 internals notes below still ho
 - **`Stop-Process -Force` mid-session can log you out** (kills during session-DB write). Observed ×3
   historically. Current loop: plain `Stop-Process -Name Discord` (no `-Force`) + 3s wait, then relaunch
   via `& "$env:LOCALAPPDATA\Discord\Update.exe" --processStart Discord.exe`. So far no logout this run.
-- **DevTools:** Discord Stable forces `webPreferences.devTools=false` and wipes the `settings.json`
-  flag on exit. We force `devTools=true` in the shim's `PatchedBrowserWindow` ctor. Don't bother with
-  settings.json.
+- **DevTools:** Discord Stable forces `webPreferences.devTools=false`. We leave that alone —
+  re-enabling / docking DevTools raises the practical minimum window size. Verify via
+  `logs/discord-console.log`. Don't bother with settings.json DevTools flags.
 - **CSP blocks inline `<script>`** (`Refused to execute inline script…`). Inject via
   `webFrame.executeJavaScript` from the preload (runs in main world, bypasses CSP).
 
@@ -227,7 +227,8 @@ Real action shapes (build 1.0.9239):
     `minimize()` / `isMaximized()?unmaximize():maximize()` / `close()`.
   - renderer `installWindowControls()`: capture-phase `click` on `[class*="winButton"]`, skip the 0×0
     leading set, read `aria-label` (minimize / maximize / restore), call the bridge. No `preventDefault`
-    so Discord's own inert handler still runs harmlessly. Close left to Discord.
+    so Discord's own inert handler still runs harmlessly. Close also uses the bridge (`api.close()` →
+    `win.close()`) — Discord's close IPC is equally dead on this build.
 - **Verified end-to-end:** bridge `toggleMaximize()` drove 720→1392 and restored (same path as a click).
 - These probes also revealed the **hot-reload reinject is broken** (file-change `re-injecting` logs but
   the new IIFE never re-emits `renderer injected` — the guard isn't actually re-running new code). Not
@@ -480,3 +481,6 @@ bulk-delete mixed-batch trim. Each regex test asserts the renderer.js source sti
   unmaximize`; renderer `installWindowControls()` catches `winButton` clicks. Verified end-to-end
   (toggleMaximize 720→1392→restore). No perf change (idle overhead already ~0; logged blocking is
   Discord's). Also noted hot-reload reinject is broken (separate, out of scope). Committed + pushed.
+- 2026-07-22: **DevTools left off** (no longer force `devTools=true` / Ctrl+Shift+I) — docked DevTools
+  raise Chromium min window size. **Close button bridged** via existing `DCModNative.close` →
+  `win.close()` (was intentionally falling through to dead Discord IPC). Verify via log file.

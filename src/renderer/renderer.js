@@ -1193,8 +1193,9 @@
   // the min/maximize buttons appear but do nothing. The Electron window itself is
   // fully resizable/maximizable (verified main-process win.maximize() works). We
   // route clicks through our OWN bridge (preload exposes DCModNative → shim ipcMain
-  // → win.minimize()/maximize()/unmaximize()). Close is left to Discord. Capture
-  // phase + no preventDefault so Discord's own (inert) handler still runs harmlessly.
+  // → win.minimize()/maximize()/unmaximize()/close()). Close must use the bridge too —
+  // Discord's renderer close IPC is equally dead. Capture phase + no preventDefault so
+  // Discord's own (inert) handler still runs harmlessly.
   // ---------------------------------------------------------------------------
   function installWindowControls() {
     if (window.__DCMOD_WINCTL__) return;
@@ -1216,12 +1217,12 @@
           const label = (btn.getAttribute("aria-label") || "").toLowerCase();
           if (label === "minimize") api.minimize();
           else if (label === "maximize" || label === "restore") api.toggleMaximize();
-          // "close" intentionally falls through to Discord's own handler.
+          else if (label === "close") api.close();
         } catch (err) {}
       },
       true // capture: beat Discord's (inert) handler
     );
-    log("window controls bridged (min/maximize via DCModNative)");
+    log("window controls bridged (min/maximize/close via DCModNative)");
   }
 
   // ---------------------------------------------------------------------------
@@ -1293,7 +1294,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Public toggle (use from DevTools console)
+  // Public toggle (use from the console mirror in logs/discord-console.log — DevTools off)
   // ---------------------------------------------------------------------------
   window.DCMod = {
     toggleDeleted() {

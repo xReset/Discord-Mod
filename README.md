@@ -13,9 +13,9 @@ Features today:
 - **Copy Avatar** — adds a native-looking item to the user context menu that copies a hi-res avatar PNG
   to your clipboard. In a server where they have a server-specific pfp you get both *Copy Server Avatar*
   and *Copy Avatar*.
-- **Window-control fix** — on this frozen 9240 build Discord's own titlebar **minimize / maximize**
+- **Window-control fix** — on this frozen build Discord's own titlebar **minimize / maximize / close**
   buttons are dead (its renderer→main IPC for window controls no-ops). We route those clicks through
-  our own bridge (preload `ipcRenderer` → shim `ipcMain` → `win.minimize()/maximize()`) so they work.
+  our own bridge (preload `ipcRenderer` → shim `ipcMain` → `win.minimize()/maximize()/close()`) so they work.
 
 This is fully our own injector (not Vencord/BetterDiscord). It loads the original Discord app
 untouched and adds a chained preload that injects our renderer script.
@@ -47,11 +47,13 @@ The same dispatcher hook also blocks `TRACK` analytics actions; a fetch/XHR/send
 (`fastUI`). A capture-phase `contextmenu` listener parses the right-clicked user's avatar to inject
 the **Copy Avatar** item, cloned from Discord's own "Copy User ID" item so styling matches exactly;
 hi-res URLs come from UserStore / GuildMemberStore. A capture-phase `click` listener catches the
-titlebar `winButton` min/maximize clicks and drives them through the `DCModNative` window-control
+titlebar `winButton` min/maximize/close clicks and drives them through the `DCModNative` window-control
 bridge (preload `ipcRenderer.send('DCMOD_WINCTL', …)` → shim `ipcMain` → the sender window's
-`minimize()` / `maximize()` / `unmaximize()`), because Discord's own window-control IPC is dead on
+`minimize()` / `maximize()` / `unmaximize()` / `close()`), because Discord's own window-control IPC is dead on
 this build. Verified: main-process `win.maximize()` works while renderer `DiscordNative.window.maximize()`
 no-ops, confirming the break is Discord's IPC, not the Electron window (which is fully maximizable).
+DevTools are left off (Stable default) so docked inspector chrome does not raise the minimum window size;
+verify boots via `logs/discord-console.log`.
 
 **Perf:** our hooks cost ~0 at idle (verified). The interceptor early-outs on non-delete actions before
 any timing; perf timing is gated behind a `_measuring` flag (off unless benchmarking). See `AGENT_NOTES.md`.
@@ -66,7 +68,7 @@ npm install            # gets @electron/asar
 node install.js
 ```
 
-Then relaunch Discord. Open DevTools (`Ctrl+Shift+I`) → Console; you should see `[DCMod] ready`.
+Then relaunch Discord. Check `logs/discord-console.log` — you should see `[DCMod] ready`.
 
 ### Use it
 - **Snipe:** have someone delete a message in a channel you're viewing → it turns **red** (no label)
@@ -75,9 +77,9 @@ Then relaunch Discord. Open DevTools (`Ctrl+Shift+I`) → Console; you should se
   paste the image straight into chat.
 - Telemetry blocking + fast UI are **on by default** — nothing to click.
 - There is **no UI panel / launcher button** anymore (removed). Everything is automatic or via the
-  context menu; tuning is through the console.
+  context menu; tuning is through `DCMod.*` (logged to `logs/discord-console.log` — in-app DevTools are off).
 
-Console controls:
+Console controls (appear in the session log when invoked — typically via a one-off debug session):
 - `DCMod.toggleDeleted()` — snipe on/off · `DCMod.clearDeleted()` — clear all red styling
 - `DCMod.removeLocal(id)` — remove one preserved message
 - `DCMod.noTrack(bool?)` — telemetry blocking on/off; returns `{enabled, blocked}` count
@@ -91,7 +93,7 @@ Console controls:
 Settings (`noTrack` / `fastUI` / deleted-viewer on-off / `debug`) **persist across restarts**
 (`localStorage` key `dcmod:settings`) — set once and it sticks.
 
-On boot the console prints a **health line** — `health dispatcher=ok interceptor=… deleteHook=ok …` —
+On boot the log prints a **health line** — `health dispatcher=ok interceptor=… deleteHook=ok …` —
 one glance confirms every subsystem hooked (check it first if something seems off after a Discord update).
 
 ## Iterate

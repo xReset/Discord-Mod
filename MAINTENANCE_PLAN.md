@@ -97,7 +97,7 @@
 
 | Phase | Status |
 |-------|--------|
-| A DevTools + close | queued |
+| A DevTools + close | done (2026-07-22) |
 | B Bugfixes | queued |
 | C Update + stamp + process guard | queued |
 | D Tests + docs | queued |
