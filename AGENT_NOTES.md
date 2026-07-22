@@ -507,3 +507,6 @@ bulk-delete mixed-batch trim. Each regex test asserts the renderer.js source sti
   MessageStore content; deleted rows still removeLocal.
 - 2026-07-22: **Spellchecker off** by default (`setSpellCheckerEnabled(false)`); `DCMod.spellcheck(true)`
   restores via `DCMOD_SPELLCHECK` IPC; setting persists.
+- 2026-07-22: **Channel retain** = warm-fetch on `CHANNEL_SELECT` return to last-8 channels when store
+  looks thin (`DCMod.retain`). Not a true MessageStore pin (eviction fight still deferred). GIF-favorites
+  cache + offscreen autoplay throttle skipped (complexity / playback risk).
