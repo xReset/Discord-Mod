@@ -91,9 +91,10 @@ Console controls (appear in the session log when invoked — typically via a one
 - `DCMod.editSnipe(id)` — pre-edit revisions captured for a message (edit-snipe)
 - `DCMod.ghostPings()` — ids of deleted messages that @mentioned you this session (styled **orange**)
 - `DCMod.prefetch(bool?)` — hover-prefetch on/off (warms a channel's messages on hover → instant open)
+- `DCMod.retain(bool?)` — warm-fetch when returning to a recent channel (MessageStore pin stand-in)
 - `DCMod.spellcheck(bool?)` — Chromium spellchecker on/off (default OFF — no red underlines; lighter)
 
-Settings (`noTrack` / `fastUI` / deleted-viewer on-off / `prefetch` / `spellcheck` / `debug`) **persist across restarts**
+Settings (`noTrack` / `fastUI` / deleted-viewer on-off / `prefetch` / `retain` / `spellcheck` / `debug`) **persist across restarts**
 (`localStorage` key `dcmod:settings`) — set once and it sticks.
 
 **Shift+right-click** a message: copy message link · **Alt+shift+right-click**: copy raw content ·

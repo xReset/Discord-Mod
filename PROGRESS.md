@@ -6,6 +6,13 @@ context-menu item, ✅ window-control fix (min/maximize/**close**) all working o
 Auto-update **frozen** (icacls deny-folder on `%LOCALAPPDATA%\Discord`) so updates can't wipe the mod.
 DevTools left off (Stable default) to preserve small minimize sizes. Active queue: `MAINTENANCE_PLAN.md`.
 
+## 2026-07-22 — channel retain (warm-fetch on return)
+
+- Safe stand-in for MessageStore pinning: remember last 8 channel ids; on `CHANNEL_SELECT`
+  back to one whose `getMessages` looks thin (<10), call `fetchMessages({channelId,limit:50})`.
+- Does **not** fight Discord eviction / rehydrate fake bundles (stale/memory risk unchanged).
+- Toggle `DCMod.retain` (default ON). Health: `retain=ok|off`.
+
 ## 2026-07-22 — spellchecker off (default) + DCMod.spellcheck toggle
 
 - Shim: `session.setSpellCheckerEnabled(false)` on window create (Tier-2 resource save).
