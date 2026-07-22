@@ -11,14 +11,12 @@
 
 ## Research verdicts (2026-07-22)
 
-### DevTools → larger minimum window — validated (high confidence)
+### DevTools → larger minimum window — **partial / revised**
 
-- The shim forced `webPreferences.devTools = true` and bound Ctrl+Shift+I → `toggleDevTools()`.
-- Repo has no custom `setMinimumSize` / `minWidth` / `minHeight`.
-- Chromium docked DevTools impose their own layout floor; with DevTools open the outer window must
-  fit panel + content, so the practical minimize floor grows (~100–200px depending on dock/DPI).
-- **Decision:** restore Stable behavior — do not force DevTools on; remove the hotkey. Verify via
-  `logs/discord-console.log`.
+- DevTools dock *can* raise the practical floor when open; we still leave Stable's `devTools=false`.
+- **User follow-up (confirmed):** the shrink limit was **not** DevTools. Vanilla Discord
+  (`discord_desktop_core`) defaults **`MIN_WIDTH=940` / `MIN_HEIGHT=500`**.
+- **Fix shipped:** shim zeros ctor mins + no-ops `setMinimumSize` (see AGENT_NOTES § Window minimum size).
 
 ### Titlebar X / close does nothing — confirmed bug
 

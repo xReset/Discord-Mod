@@ -6,6 +6,14 @@ context-menu item, ✅ window-control fix (min/maximize/**close**) all working o
 Auto-update **frozen** (icacls deny-folder on `%LOCALAPPDATA%\Discord`) so updates can't wipe the mod.
 DevTools left off (Stable default) to preserve small minimize sizes. Active queue: `MAINTENANCE_PLAN.md`.
 
+## 2026-07-22 — disable Discord min window size (940×500)
+
+- Root cause of "can't shrink Discord": vanilla `discord_desktop_core` defaults
+  `MIN_WIDTH=940` / `MIN_HEIGHT=500` (not DevTools). Confirmed in live `core.asar`.
+- Shim now forces `options.minWidth/minHeight = 0`, calls real `setMinimumSize(0,0)`, then
+  replaces `setMinimumSize` with a no-op so `WINDOW_SET_MINIMUM_SIZE` can't restore the floor.
+- Log line: `min-size disabled (ctor 0x0; setMinimumSize no-op)`.
+
 ## 2026-07-22 — tests + doc hygiene
 
 - Extended `test/pure.test.js`: bulk all-blocked/all-allowed/empty, RETENTION_CAP=500, prefetch href

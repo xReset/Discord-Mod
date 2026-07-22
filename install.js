@@ -136,9 +136,23 @@ Module._load = function (request, parent, isMain) {
             // Leave Discord Stable's webPreferences.devTools=false alone. Forcing DevTools
             // on (and docking them) raises Chromium's practical minimum window size.
           }
+          // Discord Stable defaults minWidth/minHeight to 940x500 (discord_desktop_core).
+          // Zero them at construction AND no-op setMinimumSize so the webapp's
+          // WINDOW_SET_MINIMUM_SIZE IPC can't put the floor back (Vencord-style).
+          if (options) {
+            options.minWidth = 0;
+            options.minHeight = 0;
+          }
         } catch (e) {}
         super(options);
         try {
+          // Zero the Electron floor with the real API, THEN no-op so Discord's
+          // WINDOW_SET_MINIMUM_SIZE IPC can't put 940x500 (or anything) back.
+          try {
+            RealBW.prototype.setMinimumSize.call(this, 0, 0);
+          } catch (e) {}
+          this.setMinimumSize = function () { /* no-op: allow arbitrary resize */ };
+          logLine(1, "[DCMod] min-size disabled (ctor 0x0; setMinimumSize no-op)");
           // Mirror renderer console -> log file (handles old + new Electron signatures).
           this.webContents.on("console-message", function () {
             const a = arguments;
