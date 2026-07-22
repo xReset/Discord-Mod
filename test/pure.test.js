@@ -196,3 +196,12 @@ test("message link builder: guild/@me + channel + id", () => {
   assert.ok(SRC.includes("e.altKey"), "shift+alt must copy raw content");
   assert.ok(SRC.includes('_copyText(link, "message link")'), "shift+right-click copies link");
 });
+
+test("spellcheck bridge present (default off)", () => {
+  assert.ok(SRC.includes("spellcheck: false"), "default spellcheck must be false in settings defaults");
+  assert.ok(SRC.includes("_applySpellcheck"), "must apply via DCModNative on boot/toggle");
+  assert.ok(SRC.includes("spellcheck(on)"), "DCMod.spellcheck API must exist");
+  const installSrc = fs.readFileSync(path.join(__dirname, "..", "install.js"), "utf8");
+  assert.ok(installSrc.includes("setSpellCheckerEnabled(false)"), "shim must disable spellchecker at construct");
+  assert.ok(installSrc.includes("DCMOD_SPELLCHECK"), "shim must handle spellcheck IPC");
+});

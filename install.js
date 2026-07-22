@@ -153,6 +153,12 @@ Module._load = function (request, parent, isMain) {
           } catch (e) {}
           this.setMinimumSize = function () { /* no-op: allow arbitrary resize */ };
           logLine(1, "[DCMod] min-size disabled (ctor 0x0; setMinimumSize no-op)");
+          // Spellchecker off by default (Tier-2 resource save). Loses red underlines.
+          // Runtime toggle: DCMod.spellcheck(true/false) → DCMOD_SPELLCHECK IPC.
+          try {
+            this.webContents.session.setSpellCheckerEnabled(false);
+            logLine(1, "[DCMod] spellchecker disabled (default; DCMod.spellcheck(true) to restore)");
+          } catch (e) {}
           // Mirror renderer console -> log file (handles old + new Electron signatures).
           this.webContents.on("console-message", function () {
             const a = arguments;
@@ -199,6 +205,11 @@ try {
       else if (action === "close") win.close();
     } catch (e) {}
   });
+  electron.ipcMain.on("DCMOD_SPELLCHECK", function (event, enabled) {
+    try {
+      event.sender.session.setSpellCheckerEnabled(!!enabled);
+    } catch (e) {}
+  });
 } catch (e) {}
 
 // Hand control to the original, untouched Discord app.
@@ -219,6 +230,7 @@ try {
     minimize: function () { ipcRenderer.send("DCMOD_WINCTL", "minimize"); },
     toggleMaximize: function () { ipcRenderer.send("DCMOD_WINCTL", "toggleMaximize"); },
     close: function () { ipcRenderer.send("DCMOD_WINCTL", "close"); },
+    spellcheck: function (enabled) { ipcRenderer.send("DCMOD_SPELLCHECK", !!enabled); },
     patchedBuild: DCMOD_PATCHED_BUILD,
   };
   try {

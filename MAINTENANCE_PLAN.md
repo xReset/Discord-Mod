@@ -102,5 +102,6 @@
 | B Bugfixes | done (2026-07-22) |
 | C Update + stamp + process guard | done (2026-07-22) — live build **1.0.9248**; stamp + process guard shipped; re-run `node install.js` after quit to apply shim |
 | D Tests + docs | done (2026-07-22) |
-| E Copy message-link/raw | in progress (2026-07-22) |
-| E Spellchecker / retention / GIF / autoplay | pending |
+| E Copy message-link/raw | done (2026-07-22) |
+| E Spellchecker off + toggle | in progress (2026-07-22) |
+| E MessageStore retention / GIF / autoplay | pending |

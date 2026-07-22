@@ -32,7 +32,7 @@
   // ---------------------------------------------------------------------------
   const _SETTINGS_KEY = "dcmod:settings";
   const _settings = (function () {
-    const defaults = { noTrack: true, fastUI: true, enabled: true, prefetch: true, debug: false };
+    const defaults = { noTrack: true, fastUI: true, enabled: true, prefetch: true, spellcheck: false, debug: false };
     try {
       const raw = localStorage.getItem(_SETTINGS_KEY);
       if (raw) return Object.assign(defaults, JSON.parse(raw));
@@ -42,6 +42,15 @@
   function _saveSettings() {
     try {
       localStorage.setItem(_SETTINGS_KEY, JSON.stringify(_settings));
+    } catch (e) {}
+  }
+  // Apply spellchecker preference via the main-process bridge (session API).
+  // Default OFF. Shim also disables at window construct; this re-applies after
+  // boot (and on DCMod.spellcheck toggles) so a persisted `true` restores underlines.
+  function _applySpellcheck() {
+    try {
+      const api = window.DCModNative;
+      if (api && typeof api.spellcheck === "function") api.spellcheck(!!_settings.spellcheck);
     } catch (e) {}
   }
   // DEBUG gates the chatty dev-only logs (per-delete dump, 5-min perf sampler,
@@ -1431,6 +1440,15 @@
       log("hover-prefetch " + (_prefetch ? "ON" : "OFF"));
       return _prefetch;
     },
+    // Spellchecker (main-process). Default OFF (lighter; no red underlines).
+    // DCMod.spellcheck(true) restores Discord's red underlines via IPC.
+    spellcheck(on) {
+      if (on !== undefined) _settings.spellcheck = !!on;
+      _saveSettings();
+      _applySpellcheck();
+      log("spellcheck " + (_settings.spellcheck ? "ON (red underlines)" : "OFF"));
+      return !!_settings.spellcheck;
+    },
     // Toggle chatty dev logs (per-delete dump, 5-min perf sampler, eviction lines).
     // Persisted; takes full effect on next restart for the perf sampler.
     debug(on) {
@@ -1623,6 +1641,7 @@
       }
     } catch (e) {}
     log("ready ✓  (toggle with DCMod.toggleDeleted())");
+    _applySpellcheck();
     // Structured health line — ONE grep target after a Discord update. Any `=FAIL`
     // (or deleteHook=miss) is the first thing to check; the rest of the client works
     // but that subsystem's internals moved. Cheap, one line, huge triage win.

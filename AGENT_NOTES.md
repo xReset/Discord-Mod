@@ -503,3 +503,7 @@ bulk-delete mixed-batch trim. Each regex test asserts the renderer.js source sti
 - 2026-07-22: Expanded pure tests + doc hygiene (WORKFLOW/AGENT_NOTES/MAINTENANCE_PLAN Phase D).
 - 2026-07-22: **Disable min size** — Discord core defaults 940×500; shim zeros ctor mins + no-ops
   `setMinimumSize` (webapp IPC can't restore). DevTools was a red herring for the resize floor.
+- 2026-07-22: **Copy message-link/raw** — shift+right-click copies discord.com link; alt+shift copies
+  MessageStore content; deleted rows still removeLocal.
+- 2026-07-22: **Spellchecker off** by default (`setSpellCheckerEnabled(false)`); `DCMod.spellcheck(true)`
+  restores via `DCMOD_SPELLCHECK` IPC; setting persists.
