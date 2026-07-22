@@ -1,6 +1,7 @@
 # DiscordMod — Long-Term Roadmap (perfect + maintainable)
 
-**Created 2026-06-30.** Authoritative long-term plan. Supersedes `PLAN.md` for *direction*;
+**Created 2026-06-30.** Historical long-term plan (direction + completed phases below).
+**Active work queue:** [`MAINTENANCE_PLAN.md`](MAINTENANCE_PLAN.md) (2026-07-22 onward).
 `PLAN.md`'s Tier-1/2/3 feature list is folded into **Phase 5** below. Read `WORKFLOW.md` +
 `AGENT_NOTES.md` before executing any phase.
 
@@ -9,13 +10,11 @@
 > the user notices. Every change verified per `WORKFLOW.md` (syntax check → boot clean → feature
 > works in the log → user confirms UI). No change is "done" until it passes its stated check.
 
-Current state: build **1.0.9240** (frozen), latest stable **1.0.9243** (only 3 builds ahead).
-Renderer = one 1347-line IIFE. Working features: snipe, telemetry-block, fast-UI, copy-avatar,
-window-control fix. See `PROGRESS.md`.
+Current state: build **1.0.9243** (frozen). See `PROGRESS.md` and `MAINTENANCE_PLAN.md`.
 
 ---
 
-## Status (2026-06-30)
+## Status (2026-06-30) — historical; active queue is MAINTENANCE_PLAN.md
 
 - **Phase 0 — DONE.** Updated 9240→9243, verified clean (internals unchanged).
 - **Phase 1 — DONE.** Mixed-bulk data loss, dead/dangerous `findModuleBySource`, `allowDelete` leak,
