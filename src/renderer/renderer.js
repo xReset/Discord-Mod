@@ -32,7 +32,7 @@
   // ---------------------------------------------------------------------------
   const _SETTINGS_KEY = "dcmod:settings";
   const _settings = (function () {
-    const defaults = { noTrack: true, fastUI: true, enabled: true, prefetch: true, spellcheck: false, debug: false };
+    const defaults = { noTrack: true, fastUI: true, enabled: true, prefetch: true, retain: true, spellcheck: false, debug: false };
     try {
       const raw = localStorage.getItem(_SETTINGS_KEY);
       if (raw) return Object.assign(defaults, JSON.parse(raw));
@@ -803,6 +803,13 @@
         if (enabled) captureEdit(action);
         return false;
       }
+      // Channel retain (warm-fetch on return): when revisiting a recent channel whose
+      // MessageStore looks empty/thin, fire Discord's own fetch immediately. Does NOT
+      // fight store eviction / rehydrate fake bundles (stale/memory risk — see PLAN).
+      if (type === "CHANNEL_SELECT") {
+        if (_retain) _onChannelSelect(action);
+        return false;
+      }
       if (type !== "MESSAGE_DELETE" && type !== "MESSAGE_DELETE_BULK") return false;
       const _t0 = _measuring ? performance.now() : 0;
       let result = false;
@@ -1313,6 +1320,60 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Channel retain — warm-fetch on return (safe stand-in for MessageStore pinning).
+  // True "pin last N ChannelMessages bundles" fights Discord eviction → stale/memory
+  // risk (AGENT_NOTES). Instead: remember the last RETAIN_CAP channel ids; on
+  // CHANNEL_SELECT back to one of them, if getMessages looks empty/thin, call the
+  // same fetchMessages Discord uses so back/forward feels instant. Toggle: DCMod.retain.
+  // ---------------------------------------------------------------------------
+  let _retain = _settings.retain !== false;
+  const RETAIN_CAP = 8;
+  const RETAIN_WARM_MIN = 10; // if fewer than this many msgs cached, warm-fetch
+  const _recentChannels = []; // LRU (oldest at [0])
+
+  function _touchRecent(channelId) {
+    if (!channelId) return;
+    const id = String(channelId);
+    const i = _recentChannels.indexOf(id);
+    if (i >= 0) _recentChannels.splice(i, 1);
+    _recentChannels.push(id);
+    while (_recentChannels.length > RETAIN_CAP) _recentChannels.shift();
+  }
+
+  function _channelMsgCount(channelId) {
+    try {
+      const s = _msgStore();
+      const b = s && s.getMessages && s.getMessages(channelId);
+      if (!b) return 0;
+      if (typeof b.length === "number") return b.length;
+      if (typeof b.size === "number") return b.size;
+      if (typeof b.getSize === "function") return b.getSize();
+      if (b._array && typeof b._array.length === "number") return b._array.length;
+      return 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function _onChannelSelect(action) {
+    try {
+      const channelId = action && (action.channelId || (action.channel && action.channel.id));
+      if (!channelId) return;
+      const id = String(channelId);
+      const wasRecent = _recentChannels.indexOf(id) >= 0;
+      _touchRecent(id);
+      if (!wasRecent) return; // first visit this session — Discord fetches normally
+      if (_channelMsgCount(id) >= RETAIN_WARM_MIN) return; // already warm
+      const MF = _fetchAction();
+      if (!MF || typeof MF.fetchMessages !== "function") return;
+      MF.fetchMessages({ channelId: id, limit: 50 });
+      if (DEBUG) log("retain warm-fetch channel=" + id);
+    } catch (e) {
+      if (DEBUG) warn("retain warm-fetch failed", String(e));
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Hover-prefetch — on sustained hover (~150ms intent) over a channel/DM in the
   // sidebar, warm its message cache via Discord's own fetch action so the click
   // opens it instantly. Bounded so it's a small eager fetch, not a storm:
@@ -1439,6 +1500,14 @@
       _saveSettings();
       log("hover-prefetch " + (_prefetch ? "ON" : "OFF"));
       return _prefetch;
+    },
+    // Warm-fetch on return to a recent channel (safe MessageStore-retention stand-in).
+    retain(on) {
+      if (on !== undefined) _retain = !!on;
+      _settings.retain = _retain;
+      _saveSettings();
+      log("channel-retain warm-fetch " + (_retain ? "ON" : "OFF") + " recent=" + _recentChannels.length);
+      return { enabled: _retain, recent: _recentChannels.slice() };
     },
     // Spellchecker (main-process). Default OFF (lighter; no red underlines).
     // DCMod.spellcheck(true) restores Discord's red underlines via IPC.
@@ -1655,6 +1724,7 @@
       " winctl=" + (window.__DCMOD_WINCTL__ ? "ok" : "skip") +
       " msgStore=" + (_msgStore() ? "ok" : "miss") +
       " prefetch=" + (window.__DCMOD_PREFETCH__ ? (_fetchAction() ? "ok" : "no-fetch-action") : "off") +
+      " retain=" + (_retain ? "ok" : "off") +
       " build=" + _patchedBuild +
       " settings=" + JSON.stringify(_settings)
     );

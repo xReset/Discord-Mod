@@ -205,3 +205,11 @@ test("spellcheck bridge present (default off)", () => {
   assert.ok(installSrc.includes("setSpellCheckerEnabled(false)"), "shim must disable spellchecker at construct");
   assert.ok(installSrc.includes("DCMOD_SPELLCHECK"), "shim must handle spellcheck IPC");
 });
+
+test("channel retain warm-fetch on CHANNEL_SELECT", () => {
+  assert.ok(SRC.includes('type === "CHANNEL_SELECT"'), "interceptor must see CHANNEL_SELECT");
+  assert.ok(SRC.includes("_onChannelSelect"), "must warm-fetch on return");
+  assert.ok(SRC.includes("const RETAIN_CAP = 8"), "drift: RETAIN_CAP");
+  assert.ok(SRC.includes("retain: true"), "retain default ON in settings");
+  assert.ok(SRC.includes("retain(on)"), "DCMod.retain API");
+});

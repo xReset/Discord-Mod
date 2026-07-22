@@ -83,14 +83,15 @@
 2. Align stale AGENT_NOTES / README / PROGRESS / DiscordMod with code.
 3. Sign-off style doc audit.
 
-## Phase E — Deferred features → now shipping
+## Phase E — Deferred features → shipping / resolved
 
 **Branch prefix:** `maintenance/<feature-slug>`
 
-1. **Copy message-link / raw content** via shift+right-click (non-deleted messages).
-   Deleted preserved rows keep removeLocal. Alt+shift+right-click → raw content.
-2. Spellchecker off (needs consent) — see status.
-3. MessageStore retention / GIF-favorites cache / offscreen autoplay throttle — see status.
+1. **Copy message-link / raw content** via shift+right-click — **done**.
+2. **Spellchecker off** (default) + `DCMod.spellcheck` toggle — **done**.
+3. **MessageStore retention** — **done as warm-fetch on return** (does not pin store bundles).
+4. **GIF-favorites cache** — **skipped** (needs live picker recon + React paint override; high complexity).
+5. **Offscreen autoplay throttle** — **skipped** (playback risk; needs visual A/B on busy GIF channels).
 
 ---
 
@@ -103,5 +104,6 @@
 | C Update + stamp + process guard | done (2026-07-22) — live build **1.0.9248**; stamp + process guard shipped; re-run `node install.js` after quit to apply shim |
 | D Tests + docs | done (2026-07-22) |
 | E Copy message-link/raw | done (2026-07-22) |
-| E Spellchecker off + toggle | in progress (2026-07-22) |
-| E MessageStore retention / GIF / autoplay | pending |
+| E Spellchecker off + toggle | done (2026-07-22) |
+| E Channel retain (warm-fetch) | in progress (2026-07-22) |
+| E GIF cache / offscreen autoplay | skipped (2026-07-22) — see reasons above |
