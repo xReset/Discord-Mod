@@ -938,10 +938,76 @@
     ensureObserver(); // no-op until first deletion
   }
 
-  // SHIFT + right-click a preserved (red) deleted message → remove it from our
-  // local view for good (replays the real delete via removeLocal). Plain
-  // right-click (and any click on a non-preserved message) passes through to
-  // Discord untouched.
+  // Guild-or-@me segment from the open channel URL (`/channels/<guild|@me>/<chan>`).
+  function _pathGuild() {
+    try {
+      const m = location.pathname.match(/^\/channels\/([^/]+)/);
+      return m ? m[1] : "@me";
+    } catch (e) {
+      return "@me";
+    }
+  }
+
+  function _pathChannel() {
+    try {
+      const m = location.pathname.match(/\/channels\/[^/]+\/(\d+)/);
+      return m ? m[1] : undefined;
+    } catch (e) {
+      return undefined;
+    }
+  }
+
+  // discord.com/channels/<guild|@me>/<channelId>/<messageId>
+  function _messageLink(channelId, messageId) {
+    if (!channelId || !messageId) return null;
+    return "https://discord.com/channels/" + _pathGuild() + "/" + channelId + "/" + messageId;
+  }
+
+  // Resolve a message id (+ row/channel/deleted) from a contextmenu event target.
+  function _messageFromEvent(e) {
+    let id = null;
+    let row = null;
+    let deleted = false;
+    try {
+      const holder = e.target.closest("[data-dcmod-id]");
+      if (holder) {
+        id = holder.dataset.dcmodId;
+        row = holder;
+        deleted = true;
+      }
+      if (!id) {
+        const node = e.target.closest('[id^="message-content-"]');
+        if (node) {
+          id = node.id.slice("message-content-".length);
+          deleted = node.classList.contains("dcmod-deleted");
+          row = node.closest('[id^="chat-messages"]') || node.closest("li") || node.parentElement;
+        }
+      }
+      if (!id) {
+        row = e.target.closest('[id^="chat-messages"]');
+        if (row) id = _idOfRow(row);
+      }
+    } catch (err) {}
+    if (!id) return null;
+    const channelId = _channelOf(row) || _pathChannel();
+    return { id: String(id), row, channelId, deleted };
+  }
+
+  async function _copyText(text, label) {
+    try {
+      await navigator.clipboard.writeText(text);
+      log((label || "copied") + " → clipboard (" + (text.length > 120 ? text.slice(0, 117) + "…" : text) + ")");
+      return true;
+    } catch (err) {
+      warn("clipboard write failed", String(err));
+      return false;
+    }
+  }
+
+  // SHIFT + right-click:
+  //   - preserved (red) deleted row → removeLocal (unchanged)
+  //   - any other message → copy message link (Alt held → copy raw content instead)
+  // Plain right-click always passes through to Discord untouched.
   function installContextMenu() {
     if (window.__DCMOD_CTX_INSTALLED__) return; // survive hot-reload re-injects
     window.__DCMOD_CTX_INSTALLED__ = true;
@@ -950,18 +1016,30 @@
       (e) => {
         try {
           if (!e.shiftKey || !e.target || !e.target.closest) return; // only shift+right-click
-          // Prefer the tagged row (works for gif/embed-only messages too).
-          let id = null;
-          const holder = e.target.closest("[data-dcmod-id]");
-          if (holder) id = holder.dataset.dcmodId;
-          if (!id) {
-            const node = e.target.closest('[id^="message-content-"]');
-            if (node && node.classList.contains("dcmod-deleted")) id = node.id.slice("message-content-".length);
-          }
-          if (!id) return;
+          const info = _messageFromEvent(e);
+          if (!info) return;
           e.preventDefault();
           e.stopPropagation();
-          removeLocal(id);
+          if (info.deleted) {
+            removeLocal(info.id);
+            return;
+          }
+          if (e.altKey) {
+            const msg = _msgFromStore(info.channelId, info.id);
+            const raw = msg && typeof msg.content === "string" ? msg.content : "";
+            if (!raw) {
+              warn("copy raw: no content for id=" + info.id + " chan=" + info.channelId);
+              return;
+            }
+            _copyText(raw, "raw content");
+            return;
+          }
+          const link = _messageLink(info.channelId, info.id);
+          if (!link) {
+            warn("copy link: missing channel/id");
+            return;
+          }
+          _copyText(link, "message link");
         } catch (err) {}
       },
       true // capture: beat Discord's own handler
