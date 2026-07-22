@@ -16,6 +16,7 @@ Run this when finishing work in `E:\DiscordMod`. Goal: leave the repo with **acc
 2. **Audit every `.md` against the code — do not trust existing prose.** For each doc below, read it
    and fix anything the session made false. Common drift: removed features still described, renamed
    `DCMod.*` console controls, changed install/iterate steps, the current Discord build number.
+   - `MAINTENANCE_PLAN.md` — active phased queue; mark phases done when shipped.
    - `README.md` — user-facing: features, controls (`DCMod.*`), install/iterate, caveats.
    - `PROGRESS.md` — status line at top + append a dated entry; fix the "planned/done" list.
    - `AGENT_NOTES.md` — hard-won internals + perf rules + **append one changelog line** (bottom).

@@ -118,3 +118,58 @@ test("bulk-delete trim: mixed batch keeps blocked ids, deletes allowed", () => {
   assert.deepStrictEqual(action.ids, ["a", "c"], "only allow-listed ids delete");
   assert.deepStrictEqual(block, ["b", "d"], "others' ids preserved (stay red)");
 });
+
+test("bulk-delete: all blocked → result true; all allowed → pass-through; empty ids", () => {
+  const run = (ids, allow) => {
+    const allowDelete = new Set(allow);
+    const action = { type: "MESSAGE_DELETE_BULK", ids: ids.slice() };
+    const block = action.ids.filter((x) => !allowDelete.has(x));
+    let result = false;
+    if (block.length === action.ids.length) result = true;
+    else if (block.length > 0) {
+      const blockSet = new Set(block);
+      action.ids = action.ids.filter((x) => !blockSet.has(x));
+    }
+    return { result, ids: action.ids, block };
+  };
+  assert.deepStrictEqual(run(["a", "b"], []), { result: true, ids: ["a", "b"], block: ["a", "b"] });
+  assert.deepStrictEqual(run(["a", "b"], ["a", "b"]), { result: false, ids: ["a", "b"], block: [] });
+  assert.deepStrictEqual(run([], []), { result: true, ids: [], block: [] }); // empty: block.length===ids.length
+});
+
+test("retention cap matches renderer RETENTION_CAP=500", () => {
+  assert.ok(SRC.includes("const RETENTION_CAP = 500"), "drift: RETENTION_CAP changed");
+  const CAP = 500;
+  const s = new Set();
+  for (let i = 0; i < 600; i++) {
+    s.add("id" + i);
+    while (s.size > CAP) s.delete(s.values().next().value);
+  }
+  assert.strictEqual(s.size, CAP);
+  assert.ok(!s.has("id0"));
+  assert.ok(s.has("id599"));
+});
+
+test("prefetch channel href parse", () => {
+  const lit = "\\/channels\\/[^/]+\\/(\\d+)";
+  assert.ok(SRC.includes("\\/channels\\/[^/]+\\/(\\d+)"), "drift: prefetch href regex changed");
+  const re = /\/channels\/[^/]+\/(\d+)/;
+  assert.strictEqual("/channels/@me/123456789012345678".match(re)[1], "123456789012345678");
+  assert.strictEqual("/channels/111/222".match(re)[1], "222");
+  assert.strictEqual(re.test("/channels/111"), false);
+  assert.ok(SRC.includes("PREFETCH_INTENT_MS = 150"), "drift: prefetch intent ms changed");
+});
+
+test("clearDeleted cleanup contract present in source", () => {
+  // Drift guards: clearDeleted must strip row attrs, clear deletedActions, stop observer.
+  assert.ok(SRC.includes("clearDeleted()"), "clearDeleted missing");
+  assert.ok(SRC.includes('querySelectorAll(".dcmod-deleted-row")'), "must strip dcmod-deleted-row");
+  assert.ok(SRC.includes("deletedActions.clear()"), "must clear deletedActions");
+  assert.ok(SRC.includes("stopObserverIfIdle()"), "must stop observer when idle");
+  assert.ok(SRC.includes('delete el.dataset.dcmodId') || SRC.includes('removeAttribute("data-dcmod-id")'), "must clear data-dcmod-id");
+});
+
+test("close button bridged via DCModNative", () => {
+  assert.ok(SRC.includes('label === "close"'), "close aria-label must be handled");
+  assert.ok(SRC.includes("api.close()"), "must call api.close()");
+});

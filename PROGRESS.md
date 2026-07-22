@@ -6,6 +6,13 @@ context-menu item, ✅ window-control fix (min/maximize/**close**) all working o
 Auto-update **frozen** (icacls deny-folder on `%LOCALAPPDATA%\Discord`) so updates can't wipe the mod.
 DevTools left off (Stable default) to preserve small minimize sizes. Active queue: `MAINTENANCE_PLAN.md`.
 
+## 2026-07-22 — tests + doc hygiene
+
+- Extended `test/pure.test.js`: bulk all-blocked/all-allowed/empty, RETENTION_CAP=500, prefetch href
+  parse, clearDeleted cleanup contract, close-button bridge drift guards.
+- Cleared stale AGENT_NOTES "Finding FluxDispatcher in-progress"; WORKFLOW points at
+  `MAINTENANCE_PLAN.md` and documents DevTools-off + disabled hot-reload.
+
 ## 2026-07-22 — build stamp + install process guard + note 9248
 
 - Installed Discord is **app-1.0.9248** (docs previously said 9243). Freeze may already be lifted /
