@@ -83,11 +83,14 @@
 2. Align stale AGENT_NOTES / README / PROGRESS / DiscordMod with code.
 3. Sign-off style doc audit.
 
-## Phase E — Deferred (not in this pass)
+## Phase E — Deferred features → now shipping
 
-- Spellchecker off (needs consent)
-- MessageStore retention / GIF-favorites cache / offscreen autoplay throttle
-- Copy message-link via shift+right-click
+**Branch prefix:** `maintenance/<feature-slug>`
+
+1. **Copy message-link / raw content** via shift+right-click (non-deleted messages).
+   Deleted preserved rows keep removeLocal. Alt+shift+right-click → raw content.
+2. Spellchecker off (needs consent) — see status.
+3. MessageStore retention / GIF-favorites cache / offscreen autoplay throttle — see status.
 
 ---
 
@@ -99,4 +102,5 @@
 | B Bugfixes | done (2026-07-22) |
 | C Update + stamp + process guard | done (2026-07-22) — live build **1.0.9248**; stamp + process guard shipped; re-run `node install.js` after quit to apply shim |
 | D Tests + docs | done (2026-07-22) |
-| E Deferred features | deferred |
+| E Copy message-link/raw | in progress (2026-07-22) |
+| E Spellchecker / retention / GIF / autoplay | pending |

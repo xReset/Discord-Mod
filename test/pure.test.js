@@ -173,3 +173,26 @@ test("close button bridged via DCModNative", () => {
   assert.ok(SRC.includes('label === "close"'), "close aria-label must be handled");
   assert.ok(SRC.includes("api.close()"), "must call api.close()");
 });
+
+test("message link builder: guild/@me + channel + id", () => {
+  // Mirrors _messageLink + _pathGuild/_pathChannel path segments.
+  assert.ok(SRC.includes('_messageLink(channelId, messageId)'), "drift: _messageLink missing");
+  assert.ok(SRC.includes('location.pathname.match(/^\\/channels\\/([^/]+)/)'), "drift: _pathGuild regex");
+  assert.ok(SRC.includes("https://discord.com/channels/"), "must build discord.com message links");
+  const pathGuild = (pathname) => {
+    const m = pathname.match(/^\/channels\/([^/]+)/);
+    return m ? m[1] : "@me";
+  };
+  const link = (pathname, channelId, messageId) =>
+    "https://discord.com/channels/" + pathGuild(pathname) + "/" + channelId + "/" + messageId;
+  assert.strictEqual(
+    link("/channels/111/222", "222", "333"),
+    "https://discord.com/channels/111/222/333"
+  );
+  assert.strictEqual(
+    link("/channels/@me/222", "222", "333"),
+    "https://discord.com/channels/@me/222/333"
+  );
+  assert.ok(SRC.includes("e.altKey"), "shift+alt must copy raw content");
+  assert.ok(SRC.includes('_copyText(link, "message link")'), "shift+right-click copies link");
+});

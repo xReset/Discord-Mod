@@ -6,6 +6,12 @@ context-menu item, ✅ window-control fix (min/maximize/**close**) all working o
 Auto-update **frozen** (icacls deny-folder on `%LOCALAPPDATA%\Discord`) so updates can't wipe the mod.
 DevTools left off (Stable default) to preserve small minimize sizes. Active queue: `MAINTENANCE_PLAN.md`.
 
+## 2026-07-22 — copy message-link / raw via shift+right-click
+
+- **Shift+right-click** on a normal message → clipboard `https://discord.com/channels/<guild|@me>/<chan>/<id>`.
+- **Alt+shift+right-click** → raw message content from MessageStore.
+- Preserved deleted rows: shift+right-click still `removeLocal` (unchanged).
+
 ## 2026-07-22 — disable Discord min window size (940×500)
 
 - Root cause of "can't shrink Discord": vanilla `discord_desktop_core` defaults
