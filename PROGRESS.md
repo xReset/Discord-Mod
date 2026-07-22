@@ -2,9 +2,17 @@
 
 **Last updated:** 2026-07-22
 **Current status:** ✅ Snipe (deleted viewer), ✅ telemetry blocking, ✅ fast-UI, ✅ Copy-Avatar
-context-menu item, ✅ window-control fix (min/maximize/**close**) all working on **build 1.0.9243**.
+context-menu item, ✅ window-control fix (min/maximize/**close**) all working on **build 1.0.9248**.
 Auto-update **frozen** (icacls deny-folder on `%LOCALAPPDATA%\Discord`) so updates can't wipe the mod.
 DevTools left off (Stable default) to preserve small minimize sizes. Active queue: `MAINTENANCE_PLAN.md`.
+
+## 2026-07-22 — build stamp + install process guard + note 9248
+
+- Installed Discord is **app-1.0.9248** (docs previously said 9243). Freeze may already be lifted /
+  Squirrel advanced; re-freeze after next intentional update ritual.
+- **Build-compat stamp:** `install.js` bakes the `app-<ver>` into `DCModNative.patchedBuild`; health
+  line includes `build=…`; logs `build changed old→new` when stamp differs from last session.
+- **Install/uninstall** abort if `Discord.exe` is running (avoid locked/corrupt asar).
 
 ## 2026-07-22 — correctness bugfixes (clearDeleted, prefetch, hot-reload)
 
