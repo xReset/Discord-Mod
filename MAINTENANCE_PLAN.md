@@ -105,5 +105,5 @@
 | D Tests + docs | done (2026-07-22) |
 | E Copy message-link/raw | done (2026-07-22) |
 | E Spellchecker off + toggle | done (2026-07-22) |
-| E Channel retain (warm-fetch) | in progress (2026-07-22) |
+| E Channel retain (warm-fetch) | done (2026-07-22) |
 | E GIF cache / offscreen autoplay | skipped (2026-07-22) — see reasons above |
