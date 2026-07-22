@@ -63,41 +63,11 @@ try {
   fs.writeFileSync(LOG_PATH, "=== DiscordMod session " + new Date().toISOString() + " ===\\n");
 } catch (e) {}
 
-// Hot-reload: watch the renderer's DIRECTORY (robust against editors that
-// replace the file, which breaks a single-file fs.watch on Windows) and reload
-// EVERY window on change. Reloading re-runs preload -> re-injects renderer.
-// No process kill, so the session DB is never corrupted / no logout.
-let _watchAttached = false;
-function attachReloadWatch(electronModule) {
-  if (_watchAttached) return;
-  _watchAttached = true;
-  const dir = path.dirname(RENDERER_PATH);
-  const file = path.basename(RENDERER_PATH);
-  try {
-    let timer = null;
-    fs.watch(dir, { persistent: false }, function (evt, name) {
-      if (name && name !== file) return;
-      clearTimeout(timer);
-      timer = setTimeout(function () {
-        try {
-          logLine(1, "[DCMod] renderer.js changed -> re-injecting into all windows");
-          const newCode = fs.readFileSync(RENDERER_PATH, "utf8");
-          // Reset the guard then re-run the renderer in-place — no page reload needed.
-          const reinjectCode = "window.__DCMOD_LOADED__ = false; " + newCode;
-          const wins = electronModule.BrowserWindow.getAllWindows();
-          for (const w of wins) {
-            try {
-              w.webContents.executeJavaScript(reinjectCode).catch(function (e) {
-                logLine(3, "[DCMod] reinject failed: " + String(e));
-              });
-            } catch (e) {
-              logLine(3, "[DCMod] reinject threw: " + String(e));
-            }
-          }
-        } catch (e) {}
-      }, 300);
-    });
-  } catch (e) {}
+// Hot-reload reinject is DISABLED. Resetting only __DCMOD_LOADED__ leaves other
+// idempotency guards set, so reinject silently no-ops / keeps stale closures.
+// Iterate by fully restarting Discord (tools/restart.ps1). See AGENT_NOTES.md.
+function attachReloadWatch(/* electronModule */) {
+  // intentionally empty — do not fs.watch / executeJavaScript reinject
 }
 
 // Buffer log lines and flush asynchronously — sync appendFileSync per console

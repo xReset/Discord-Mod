@@ -811,7 +811,7 @@
                 // Ghost-ping detection: did this deleted message @mention you?
                 if (_isGhostPing(action.id, action.channelId)) {
                   ghostPings.add(action.id);
-                  log("GHOST PING preserved id=" + action.id + " chan=" + action.channelId);
+                  if (DEBUG) log("GHOST PING preserved id=" + action.id + " chan=" + action.channelId);
                 }
                 markDeleted(action.id, action);
                 result = true; // block removal
@@ -1272,6 +1272,11 @@
     window.__DCMOD_PREFETCH__ = true;
     let timer = null;
     let pendingChan = null;
+    function clearIntent() {
+      clearTimeout(timer);
+      timer = null;
+      pendingChan = null;
+    }
     document.addEventListener(
       "mouseover",
       (e) => {
@@ -1285,7 +1290,26 @@
           if (chan === pendingChan) return; // same target, intent timer already armed
           pendingChan = chan;
           clearTimeout(timer);
-          timer = setTimeout(() => _prefetchChannel(chan), PREFETCH_INTENT_MS);
+          timer = setTimeout(() => {
+            timer = null;
+            pendingChan = null;
+            _prefetchChannel(chan);
+          }, PREFETCH_INTENT_MS);
+        } catch (err) {}
+      },
+      true
+    );
+    // Cancel intent if the pointer leaves the channel link before the timer fires.
+    document.addEventListener(
+      "mouseout",
+      (e) => {
+        try {
+          if (!pendingChan || !e.target || !e.target.closest) return;
+          const from = e.target.closest('a[href*="/channels/"]');
+          if (!from) return;
+          const to = e.relatedTarget && e.relatedTarget.closest ? e.relatedTarget.closest('a[href*="/channels/"]') : null;
+          if (to === from) return; // still inside the same link (child→child)
+          clearIntent();
         } catch (err) {}
       },
       true
@@ -1340,10 +1364,20 @@
     },
     clearDeleted() {
       document.querySelectorAll(".dcmod-deleted").forEach((el) => el.classList.remove("dcmod-deleted"));
+      document.querySelectorAll(".dcmod-deleted-row").forEach((el) => {
+        el.classList.remove("dcmod-deleted-row");
+        try {
+          delete el.dataset.dcmodId;
+        } catch (e) {
+          el.removeAttribute("data-dcmod-id");
+        }
+      });
       document.querySelectorAll(".dcmod-ghostping-row").forEach((el) => el.classList.remove("dcmod-ghostping-row"));
       deletedIds.clear();
+      deletedActions.clear();
       ghostPings.clear();
       _rowCache.clear();
+      stopObserverIfIdle();
       log("cleared tracked deletions");
     },
     removeLocal: (id) => removeLocal(id),

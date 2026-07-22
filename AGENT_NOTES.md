@@ -39,9 +39,9 @@ present, all hooks + DOM ids identical). The 9239 internals notes below still ho
 - **Edit `src/renderer/renderer.js` → restart Discord.** Preload reads renderer fresh each launch.
   **No `node install.js` needed** unless you change the SHIM itself (`install.js` / index.js / preload.js
   / the log filter).
-- **Hot-reload (fs.watch → `webContents.executeJavaScript`) does NOT work for iteration.** The reinject
-  runs in a context whose `console-message` is NOT captured to the log file, so you get zero feedback.
-  Treat hot-reload as dead; **full restart is the only reliable loop.**
+- **Hot-reload (`fs.watch` → `executeJavaScript` reinject) is DISABLED in the shim.** It only
+  cleared `__DCMOD_LOADED__` while other guards stayed set → silent no-ops / stale closures.
+  **Full restart is the only iterate loop** (`tools/restart.ps1` or Stop-Process + Update.exe).
 - **Logs:** `logs/discord-console.log`, fresh each launch. Filter keeps `[DCMod]` lines + real errors,
   and DROPS noise (`preloaded using link preload`, `PostMessageTransport`). Before the filter fix the
   file hit 8MB of woff2 warnings — unreadable. Don't loosen the filter back to all-warnings.
@@ -484,3 +484,5 @@ bulk-delete mixed-batch trim. Each regex test asserts the renderer.js source sti
 - 2026-07-22: **DevTools left off** (no longer force `devTools=true` / Ctrl+Shift+I) — docked DevTools
   raise Chromium min window size. **Close button bridged** via existing `DCModNative.close` →
   `win.close()` (was intentionally falling through to dead Discord IPC). Verify via log file.
+- 2026-07-22: **Bugfixes** — `clearDeleted` strips row attrs + clears `deletedActions` + stops
+  observer; prefetch cancels on mouseout; ghost-ping log DEBUG-gated; hot-reload reinject disabled.

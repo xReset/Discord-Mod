@@ -6,6 +6,15 @@ context-menu item, ✅ window-control fix (min/maximize/**close**) all working o
 Auto-update **frozen** (icacls deny-folder on `%LOCALAPPDATA%\Discord`) so updates can't wipe the mod.
 DevTools left off (Stable default) to preserve small minimize sizes. Active queue: `MAINTENANCE_PLAN.md`.
 
+## 2026-07-22 — correctness bugfixes (clearDeleted, prefetch, hot-reload)
+
+- **`clearDeleted()`:** also strips `dcmod-deleted-row` / `data-dcmod-id`, clears `deletedActions`,
+  calls `stopObserverIfIdle()` (was leaving observer live + shift+right-click able to replay deletes
+  on untracked rows).
+- **Hover-prefetch:** clear intent timer on `mouseout` so quick sidebar passes don't prefetch.
+- **Ghost-ping log:** DEBUG-gated (was noisy in active servers).
+- **Hot-reload reinject:** disabled in shim (broken/misleading); restart Discord to iterate.
+
 ## 2026-07-22 — DevTools off + titlebar close bridged
 
 - **DevTools:** stopped forcing `webPreferences.devTools=true` and removed Ctrl+Shift+I →
