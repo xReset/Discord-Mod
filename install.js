@@ -149,18 +149,12 @@ Module._load = function (request, parent, isMain) {
               process.env.DCMOD_ORIGINAL_PRELOAD = _origPreload;
               options.webPreferences.preload = PRELOAD;
             }
-            // Re-enable DevTools (Discord Stable forces this off).
-            options.webPreferences.devTools = true;
+            // Leave Discord Stable's webPreferences.devTools=false alone. Forcing DevTools
+            // on (and docking them) raises Chromium's practical minimum window size.
           }
         } catch (e) {}
         super(options);
         try {
-          // Bind Ctrl+Shift+I ourselves so it works regardless of Discord's menu.
-          this.webContents.on("before-input-event", (event, input) => {
-            if (input.control && input.shift && (input.key === "I" || input.key === "i")) {
-              this.webContents.toggleDevTools();
-            }
-          });
           // Mirror renderer console -> log file (handles old + new Electron signatures).
           this.webContents.on("console-message", function () {
             const a = arguments;
@@ -308,7 +302,7 @@ async function main() {
 
   console.log("\n[install] DONE ✓");
   console.log("  -> Fully quit Discord (right-click tray icon > Quit), then relaunch.");
-  console.log("  -> Open DevTools (Ctrl+Shift+I) console; you should see '[DCMod] ready'.");
+  console.log("  -> Verify in logs/discord-console.log — look for '[DCMod] ready'.");
   console.log("  -> Edit src/renderer/renderer.js + restart Discord to iterate (no re-install).");
   console.log("  -> After a Discord update, re-run:  node install.js\n");
 }
