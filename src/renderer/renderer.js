@@ -1531,6 +1531,19 @@
     installHoverPrefetch();
     const _delOk = hookOutgoingDeletes();
     restoreM(); // dispatcher captured — stop taxing every Function .m read
+    // Build-compat stamp (baked into shim at install time). Warn if the patched
+    // build changed since last session — Discord update / re-install signal.
+    let _patchedBuild = "unknown";
+    try {
+      _patchedBuild = (window.DCModNative && window.DCModNative.patchedBuild) || "unknown";
+      const _prevBuild = localStorage.getItem("dcmod:lastBuild");
+      if (_prevBuild && _patchedBuild && _prevBuild !== _patchedBuild) {
+        warn("build changed " + _prevBuild + "→" + _patchedBuild + " — internals may have moved; check health line");
+      }
+      if (_patchedBuild && _patchedBuild !== "unknown") {
+        localStorage.setItem("dcmod:lastBuild", _patchedBuild);
+      }
+    } catch (e) {}
     log("ready ✓  (toggle with DCMod.toggleDeleted())");
     // Structured health line — ONE grep target after a Discord update. Any `=FAIL`
     // (or deleteHook=miss) is the first thing to check; the rest of the client works
@@ -1545,6 +1558,7 @@
       " winctl=" + (window.__DCMOD_WINCTL__ ? "ok" : "skip") +
       " msgStore=" + (_msgStore() ? "ok" : "miss") +
       " prefetch=" + (window.__DCMOD_PREFETCH__ ? (_fetchAction() ? "ok" : "no-fetch-action") : "off") +
+      " build=" + _patchedBuild +
       " settings=" + JSON.stringify(_settings)
     );
     diag(); // auto-dump state so the log file is self-sufficient

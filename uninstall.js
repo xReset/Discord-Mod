@@ -1,10 +1,22 @@
 /* DiscordMod uninstaller — restores the original app.asar. Discord must be fully quit. */
 const fs = require("fs");
 const path = require("path");
+const { execSync } = require("child_process");
 
 function fail(msg) {
   console.error("\n[uninstall] ERROR: " + msg + "\n");
   process.exit(1);
+}
+
+function assertDiscordQuit() {
+  try {
+    const out = execSync('tasklist /FI "IMAGENAME eq Discord.exe" /NH', { encoding: "utf8" });
+    if (/Discord\.exe/i.test(out)) {
+      fail("Discord is running — fully quit (tray icon → Quit), then re-run node uninstall.js");
+    }
+  } catch (e) {
+    // If tasklist itself fails, proceed; locked-file errors will still surface later.
+  }
 }
 
 function discordResources() {
@@ -19,6 +31,8 @@ function discordResources() {
   if (!appDirs.length) fail("no app-<version> folder found");
   return path.join(appDirs[appDirs.length - 1], "resources");
 }
+
+assertDiscordQuit();
 
 const resources = discordResources();
 const appAsar = path.join(resources, "app.asar");

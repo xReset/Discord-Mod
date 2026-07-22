@@ -15,9 +15,10 @@
 > 4. This is the **scratch/quirks log**. `DiscordMod.md` = overview, `PROGRESS.md` = build status.
 >    Put durable internals knowledge here.
 
-**Current Discord build observed:** `app-1.0.9243` (Stable, Win11). Auto-update is FROZEN — see below.
-Updated 9240→9243 on 2026-06-30; internals UNCHANGED (dispatcher score=21 real instance, addInterceptor
-present, all hooks + DOM ids identical). The 9239 internals notes below still hold on 9243.
+**Current Discord build observed:** `app-1.0.9248` (Stable, Win11). Auto-update should stay FROZEN — see below.
+Observed 9248 on 2026-07-22 (docs previously tracked 9243). Re-run `node install.js` after quit to apply
+shim changes from the maintenance pass. Internals notes from 9239/9243 still the working baseline until
+a health-line FAIL says otherwise.
 
 ---
 
@@ -486,3 +487,5 @@ bulk-delete mixed-batch trim. Each regex test asserts the renderer.js source sti
   `win.close()` (was intentionally falling through to dead Discord IPC). Verify via log file.
 - 2026-07-22: **Bugfixes** — `clearDeleted` strips row attrs + clears `deletedActions` + stops
   observer; prefetch cancels on mouseout; ghost-ping log DEBUG-gated; hot-reload reinject disabled.
+- 2026-07-22: **Build stamp** (`DCModNative.patchedBuild` + health `build=` + `build changed` warn) and
+  install/uninstall refuse while Discord.exe is running. Live install observed at **1.0.9248**.

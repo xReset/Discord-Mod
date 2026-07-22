@@ -10,7 +10,7 @@
 > the user notices. Every change verified per `WORKFLOW.md` (syntax check → boot clean → feature
 > works in the log → user confirms UI). No change is "done" until it passes its stated check.
 
-Current state: build **1.0.9243** (frozen). See `PROGRESS.md` and `MAINTENANCE_PLAN.md`.
+Current state: build **1.0.9248** (observed 2026-07-22). See `PROGRESS.md` and `MAINTENANCE_PLAN.md`.
 
 ---
 
@@ -190,9 +190,10 @@ instead of silent.
 2. **Boot self-check / health line.** After boot, log a single structured health line:
    `health dispatcher=ok interceptor=ok deleteHook=ok userStore=ok avatarMenu=ok winctl=ok build=<ver>`.
    Any `=fail` is the first thing to grep after a Discord update. Cheap, one line, huge triage win.
-3. **Build-compat stamp.** `install.js` writes the patched Discord build (`1.0.9243`) into the shim;
-   renderer logs `build changed <old>→<new>` if the running build differs from the last-validated one
-   → instant "internals may have moved" signal instead of mystery breakage.
+3. **Build-compat stamp.** `install.js` writes the patched Discord build into the shim
+   (`DCModNative.patchedBuild`); renderer health line includes `build=…` and logs
+   `build changed <old>→<new>` when the stamp differs from the last session.
+   - *Done (2026-07-22).*
 4. **Unit tests for pure logic.** Extract and test (plain `node --test`, no Discord needed):
    `_parseAvatarSrc`, `_globalAvatarUrl`/`_guildAvatarUrl`, `_channelOf`/`_idOfRow` regexes,
    retention eviction, telemetry regex (matches known telemetry URLs, rejects functional API URLs).

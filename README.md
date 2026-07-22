@@ -106,7 +106,7 @@ preload reads the file fresh on every launch.
 Discord's Squirrel updater installs each update as a new `app-<version>` folder and deletes the old
 one — which wipes the patched `app.asar`. `tools/freeze-version.ps1` denies the user the
 create-folder right on `%LOCALAPPDATA%\Discord`, so updates can't land and Discord keeps launching
-the modded build. Current frozen build: `app-1.0.9243`.
+the modded build. Current frozen build: `app-1.0.9248` (observed 2026-07-22).
 
 **To update on purpose (the only way it updates):**
 1. `tools\unfreeze-version.ps1`

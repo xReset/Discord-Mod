@@ -99,6 +99,6 @@
 |-------|--------|
 | A DevTools + close | done (2026-07-22) |
 | B Bugfixes | done (2026-07-22) |
-| C Update + stamp + process guard | queued |
+| C Update + stamp + process guard | done (2026-07-22) — live build **1.0.9248**; stamp + process guard shipped; re-run `node install.js` after quit to apply shim |
 | D Tests + docs | queued |
 | E Deferred features | deferred |
