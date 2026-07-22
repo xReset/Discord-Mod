@@ -145,8 +145,8 @@ breaks. Do NOT remove the capture block at the top of renderer.js.
 
 ## Open / in-progress
 
-- Finding the FluxDispatcher reliably on 1.0.9239 — see `PROGRESS.md` for live status. Latest theory:
-  per-key try/catch in the export scan was masking it. (Update this line with the outcome.)
+- None for dispatcher discovery — **SOLVED** (see section above). Remaining deferred feature work
+  lives in `MAINTENANCE_PLAN.md` Phase E (spellchecker consent, MessageStore retention, etc.).
 
 ## Gotcha: many objects expose dispatch+subscribe — most are FACADES
 
@@ -489,3 +489,4 @@ bulk-delete mixed-batch trim. Each regex test asserts the renderer.js source sti
   observer; prefetch cancels on mouseout; ghost-ping log DEBUG-gated; hot-reload reinject disabled.
 - 2026-07-22: **Build stamp** (`DCModNative.patchedBuild` + health `build=` + `build changed` warn) and
   install/uninstall refuse while Discord.exe is running. Live install observed at **1.0.9248**.
+- 2026-07-22: Expanded pure tests + doc hygiene (WORKFLOW/AGENT_NOTES/MAINTENANCE_PLAN Phase D).

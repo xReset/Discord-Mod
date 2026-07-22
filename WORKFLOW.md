@@ -7,24 +7,27 @@ break the client. Follow this exactly. When unsure, STOP and ask — do not gues
 ## Reading order (do this before touching code)
 1. `WORKFLOW.md` (this file) — how to iterate + verify.
 2. `AGENT_NOTES.md` — hard-won internals, perf rules, what breaks and why.
-3. `PLAN.md` — corrected UX model + the next build plan + undocumented hooks.
-4. `DiscordMod.md` / `SELFBOT_AND_CLIENT.md` — overview + feature map. (Skim.)
+3. `MAINTENANCE_PLAN.md` — **active** work queue (phases A–E).
+4. `PLAN.md` / `ROADMAP.md` — historical feature detail + long-term notes.
+5. `DiscordMod.md` / `SELFBOT_AND_CLIENT.md` — overview + feature map. (Skim.)
 
 ## The golden rules
 1. **Verify EVERY change. No exceptions.** A change is not "done" until you have (a) passed the
    syntax check AND (b) seen it work in the running client via the log (and asked the user to confirm
-   visually for UI/behavior). "It should work" is not done.
+   visually for UI/behavior). "It should work" is not done. Prefer `logs/discord-console.log` —
+   in-app DevTools are intentionally off.
 2. **Surgical edits only.** Touch the minimum. Do NOT refactor, rename, reformat, or "improve"
    nearby code. Match the existing style. The renderer is one long IIFE — keep it that way.
 3. **Never force-execute webpack factories** (`wreq(id)` over all of `wreq.m`). It throws and
    corrupts modules. See AGENT_NOTES. Discover via the captured requires + property/code matching.
-4. **Guard every global hook** with an idempotency flag (e.g. `MA.__dcmodSendHook`). Boot runs more
-   than once (hot-reload reinjects). Un-guarded hooks double-wrap → bugs.
+4. **Guard every global hook** with an idempotency flag (e.g. `MA.__dcmodSendHook`). Boot can run
+   more than once if reinject is ever re-enabled. Un-guarded hooks double-wrap → bugs.
 5. **Wrap risky access in try/catch.** Discord exports use throwing getters. One unguarded access
    can abort a whole scan or crash boot (then nothing loads).
 6. **Don't break the deleted-message interceptor or the `Function.prototype.m` capture.** They are
    load-bearing. If you must edit near them, re-read AGENT_NOTES first.
-7. **Commit only when the user asks.** Always `node --check` before committing.
+7. **Commit only when the user asks** (or when executing an approved maintenance PR plan). Always
+   `node --check` before committing.
 
 ## The iterate loop (the ONLY safe path)
 Renderer edits do NOT need reinstall — the preload reads `src/renderer/renderer.js` fresh each
@@ -39,8 +42,9 @@ generated `index.js`/`preload.js` strings, or the log filter.)
 5. Read the status it prints. Confirm your change's expected log line appears.
 6. For UI/behavior changes: ask the user to confirm visually. You cannot see the screen.
 ```
-Hot-reload (fs.watch auto-reinject) EXISTS but its console output is NOT captured to the log —
-treat it as unreliable for verification. **Full restart is the source of truth.**
+Hot-reload reinject is **DISABLED** in the shim (broken / stale-guard footgun). **Full restart is
+the only iterate loop.** After shim changes (`install.js`), fully quit Discord then `node install.js`.
+Install refuses while Discord.exe is running.
 
 ## How to verify (match the change type)
 - **Syntax:** `tools\check.ps1` → must say `CHECK OK`. If FAIL, do not restart.
